@@ -20,7 +20,7 @@ Open risks are listed in each PRD and summarised in [RISKS.md](RISKS.md).
 
 ## Status
 
-Implemented on branch `claude/charming-wozniak-c6bhi0`. Measurements and deviations are in
+Implemented on `main`. Measurements and deviations are in
 [RESULTS.md](RESULTS.md); open risks are in [RISKS.md](RISKS.md).
 
 | PRD | Status | Where |
@@ -30,5 +30,5 @@ Implemented on branch `claude/charming-wozniak-c6bhi0`. Measurements and deviati
 | PRD-03 | Done. Async jco transpile, needs JSPI | `wit/`, `component/`, `scripts/build-component.sh` |
 | PRD-04 | Done, with deviations 4 to 6 (chunked cache, styles, quantized) | `web/lib/model.mjs`, `model/manifest.json` |
 | PRD-05 | Done. Verified in headless Chromium | `web/`, `scripts/smoke.mjs` |
-| PRD-06 | Workflow written. Deploys on push to `main`, not yet run | `.github/workflows/pages.yml` |
+| PRD-06 | Done. Deploys on push to `main`; run 39058280866 passed and Pages serves the page | `.github/workflows/pages.yml` |
 | PRD-07 | Decision kept. No code shared with `../oscraft` | none |
