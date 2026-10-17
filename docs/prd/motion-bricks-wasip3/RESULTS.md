@@ -122,7 +122,10 @@ The spread is the download speed from Hugging Face through the proxy. Warm loads
 8. **Pages deploy uses the Pages artifact.** PRD-06 names a `gh-pages` branch, but `actions/deploy-pages`
    deploys the uploaded artifact, so no branch is written.
 9. **Commit attribution (PRD-06 item 3).** The workflow makes no commits, so there is nothing to attribute.
-10. **Memory.** Peak wasm memory during load is roughly the staged bytes plus the GGML tensors, about
+10. **Build entry point.** PRD-02 names `cmake --preset wasi-p3`. The core is configured by
+    `scripts/build-component.sh` with the same options, because the upstream presets do not cover the
+    WASI toolchain and this repository does not vendor upstream's `CMakePresets.json`.
+11. **Memory.** Peak wasm memory during load is roughly the staged bytes plus the GGML tensors, about
     1.5 GB. This was estimated from the sizes, not measured.
 
 ## Final run
