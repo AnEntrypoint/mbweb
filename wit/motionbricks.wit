@@ -1,0 +1,51 @@
+// WASIp3 component interface for the motion-bricks G1 inference path (PRD-03).
+//
+// All values cross the boundary as lists of primitives. The host streams the GGUF bytes in
+// (begin-file, write-chunk, load), so the component never touches a filesystem. The model
+// handle stays inside the component: `infer` runs against the loaded model.
+// Layouts follow upstream docs/API-INFERENCE.md:
+//   global-root: 8 slots x [x, height, z, cos(yaw), sin(yaw)]      = 40 f32
+//   local-root:  8 slots x [yaw_vel, x_vel, z_vel, height]          = 32 f32
+//   pose:        8 slots x 303 values (99 positions, 204 orientations) = 2424 f32
+// Output frames are 139 f32 each: root xyz (3), then 34 joints of local XYZW (136).
+
+package mb:motionbricks@0.1.0;
+
+interface inference {
+    record motion {
+        frames: u32,
+        // frames * 139 values, frame-major. See the layout above.
+        values: list<f32>,
+    }
+
+    /// Registers a bundle file of `size` bytes under its file name, such as "pose.gguf".
+    begin-file: func(name: string, size: u64) -> result<_, string>;
+
+    /// Copies `data` into a registered file at `offset`. The host streams a file in chunks.
+    write-chunk: func(name: string, offset: u64, data: list<u8>) -> result<_, string>;
+
+    /// Loads the registered GGUF components (pose, root, vq-decoder, support) as the model.
+    /// The staged bytes are released afterwards: the weights live in the component.
+    load: func() -> result<_, string>;
+
+    /// Parent index per joint, root first; -1 marks the root.
+    joint-parents: func() -> result<list<s32>, string>;
+
+    /// Neutral joint positions, 34 joints x xyz, in model order.
+    neutral-positions: func() -> result<list<f32>, string>;
+
+    /// Canonical standing inputs: (global-root 40, local-root 32, pose 2424).
+    standing-features: func() -> result<tuple<list<f32>, list<f32>, list<f32>>, string>;
+
+    /// One stateless inference call. Returns the frames of the clip.
+    infer: func(
+        global-root: list<f32>,
+        local-root: list<f32>,
+        pose: list<f32>,
+        seed: u64,
+    ) -> result<motion, string>;
+}
+
+world motionbricks {
+    export inference;
+}

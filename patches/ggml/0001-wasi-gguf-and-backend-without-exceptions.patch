@@ -1,0 +1,127 @@
+diff --git a/src/ggml-backend-reg.cpp b/src/ggml-backend-reg.cpp
+index e5959467..0d86b748 100644
+--- a/src/ggml-backend-reg.cpp
++++ b/src/ggml-backend-reg.cpp
+@@ -93,7 +93,11 @@
+ namespace fs = std::filesystem;
+ 
+ static std::string path_str(const fs::path & path) {
++#if defined(__cpp_exceptions)
+     try {
++#else
++    {
++#endif
+ #if defined(__cpp_lib_char8_t)
+         // C++20 and later: u8string() returns std::u8string
+         const std::u8string u8str = path.u8string();
+@@ -102,9 +106,13 @@ static std::string path_str(const fs::path & path) {
+         // C++17: u8string() returns std::string
+         return path.u8string();
+ #endif
++#if defined(__cpp_exceptions)
+     } catch (...) {
+         return std::string();
+     }
++#else
++    }
++#endif
+ }
+ 
+ struct ggml_backend_reg_entry {
+diff --git a/src/gguf.cpp b/src/gguf.cpp
+index 6c7b5817..6b675246 100644
+--- a/src/gguf.cpp
++++ b/src/gguf.cpp
+@@ -426,6 +426,7 @@ template<typename T>
+ bool gguf_read_emplace_helper(const struct gguf_reader & gr, std::vector<struct gguf_kv> & kv, const std::string & key, const bool is_array, const size_t n) {
+     if (is_array) {
+         std::vector<T> value;
++#if defined(__cpp_exceptions)
+         try {
+             if (!gr.read(value, n)) {
+                 return false;
+@@ -437,6 +438,11 @@ bool gguf_read_emplace_helper(const struct gguf_reader & gr, std::vector<struct
+             GGML_LOG_ERROR("%s: encountered bad_alloc error while reading value for key '%s'\n", __func__, key.c_str());
+             return false;
+         }
++#else
++        if (!gr.read(value, n)) {
++            return false;
++        }
++#endif
+         kv.emplace_back(key, value);
+     } else {
+         T value;
+@@ -548,6 +554,7 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
+             bool        is_array = false;
+             uint64_t    n        = 1;
+ 
++#if defined(__cpp_exceptions)
+             try {
+                 ok = ok && gr.read(key);
+             } catch (std::length_error &) {
+@@ -557,6 +564,9 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
+                 GGML_LOG_ERROR("%s: encountered bad_alloc error while reading key %" PRIi64 "\n", __func__, i);
+                 ok = false;
+             }
++#else
++            ok = ok && gr.read(key);
++#endif
+             if (ok && key.empty()) {
+                 GGML_LOG_ERROR("%s: key %" PRIi64 " is empty\n", __func__, i);
+                 ok = false;
+@@ -634,6 +644,7 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
+         // tensor name
+         {
+             std::string name;
++#if defined(__cpp_exceptions)
+             try {
+                 ok = ok && gr.read(name);
+             } catch (std::length_error &) {
+@@ -643,6 +654,9 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
+                 GGML_LOG_ERROR("%s: encountered bad_alloc error while reading tensor name %" PRIi64 "\n", __func__, i);
+                 ok = false;
+             }
++#else
++            ok = ok && gr.read(name);
++#endif
+             if (name.length() >= GGML_MAX_NAME) {
+                 GGML_LOG_ERROR("%s: tensor name %" PRIi64 " is too long: %zu >= %d\n", __func__, i, name.length(), GGML_MAX_NAME);
+                 ok = false;
+@@ -1587,7 +1601,7 @@ struct gguf_writer_file final : public gguf_writer_base {
+         const auto ret = fputc(real_val, file);
+         written_bytes++;
+         if (ret != real_val) {
+-            throw std::runtime_error("unexpected fputc result '" + std::to_string(ret) + "' instead of '" + std::to_string((int)real_val) + "'");
++            GGML_ABORT("%s", ("unexpected fputc result '" + std::to_string(ret) + "' instead of '" + std::to_string((int)real_val) + "'").c_str());
+         }
+     }
+ 
+@@ -1595,7 +1609,7 @@ struct gguf_writer_file final : public gguf_writer_base {
+         const auto ret = fwrite(val.data(), 1, val.size(), file);
+         written_bytes += val.size();
+         if (ret != val.size()) {
+-            throw std::runtime_error("unexpected fwrite number of bytes written, '" + std::to_string(ret) + "' instead of '" + std::to_string(val.size()) + "'");
++            GGML_ABORT("%s", ("unexpected fwrite number of bytes written, '" + std::to_string(ret) + "' instead of '" + std::to_string(val.size()) + "'").c_str());
+         }
+     }
+ 
+@@ -1665,6 +1679,7 @@ void gguf_write_to_buf(const struct gguf_context * ctx, std::vector<int8_t> & bu
+ bool gguf_write_to_file_ptr(const struct gguf_context * ctx, FILE * file, bool only_meta) {
+     GGML_ASSERT(file);
+ 
++#if defined(__cpp_exceptions)
+     try {
+         gguf_writer_file gw(file);
+         gguf_write_out(ctx, gw, only_meta);
+@@ -1672,6 +1687,10 @@ bool gguf_write_to_file_ptr(const struct gguf_context * ctx, FILE * file, bool o
+         GGML_LOG_ERROR("%s: failed to write GGUF data: %s\n", __func__, ex.what());
+         return false;
+     }
++#else
++    gguf_writer_file gw(file);
++    gguf_write_out(ctx, gw, only_meta);
++#endif
+     return true;
+ }
+ 

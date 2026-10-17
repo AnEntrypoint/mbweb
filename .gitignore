@@ -1,0 +1,10 @@
+# Dependencies and generated build output
+node_modules/
+build/
+site/
+.cache/
+component/gen/
+*.partial
+
+# Model weights are fetched at runtime from Hugging Face, never committed
+*.gguf

@@ -17,3 +17,18 @@ stick figure with generated motion.
 | [PRD-07](07-oscraft-decision.md) | Decision: no shared libraries with ../oscraft | none |
 
 Open risks are listed in each PRD and summarised in [RISKS.md](RISKS.md).
+
+## Status
+
+Implemented on branch `claude/charming-wozniak-c6bhi0`. Measurements and deviations are in
+[RESULTS.md](RESULTS.md); open risks are in [RISKS.md](RISKS.md).
+
+| PRD | Status | Where |
+| --- | --- | --- |
+| PRD-01 | Done. wasip3 target present in wasi-sdk 34.0 | `scripts/fetch-wasi-sdk.sh`, `cmake/wasi-p3.cmake` |
+| PRD-02 | Done, with deviations 1 to 3 (exceptions, SONIC, staged loader) | `scripts/fetch-motion-bricks.sh`, `patches/`, `scripts/native-check.sh` |
+| PRD-03 | Done. Async jco transpile, needs JSPI | `wit/`, `component/`, `scripts/build-component.sh` |
+| PRD-04 | Done, with deviations 4 to 6 (chunked cache, styles, quantized) | `web/lib/model.mjs`, `model/manifest.json` |
+| PRD-05 | Done. Verified in headless Chromium | `web/`, `scripts/smoke.mjs` |
+| PRD-06 | Workflow written. Deploys on push to `main`, not yet run | `.github/workflows/pages.yml` |
+| PRD-07 | Decision kept. No code shared with `../oscraft` | none |

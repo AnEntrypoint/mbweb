@@ -1,0 +1,326 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index adfb25f..9d689bc 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -31,6 +31,7 @@ option(MOTIONBRICKS_ENABLE_VULKAN_PARITY_TESTS "Run hardware-dependent Vulkan pa
+ option(MOTIONBRICKS_ENABLE_FUZZERS "Build libFuzzer targets" OFF)
+ option(MOTIONBRICKS_SANITIZE "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+ option(MOTIONBRICKS_ENABLE_PHYSICS "Enable native MuJoCo / GGML SONIC simulation (3.12.0 or 3.3.5 reference)" OFF)
++option(MOTIONBRICKS_ENABLE_SONIC "Compile the SONIC sources (exception-using; off for the WASI core)" ON)
+ option(MOTIONBRICKS_DOWNLOAD_MODELS "Download and verify the published runtime model/style bundle" ON)
+ set(MOTIONBRICKS_GGML_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ggml" CACHE PATH
+     "Pinned GGML submodule source directory")
+@@ -81,13 +82,16 @@ set(MOTIONBRICKS_SOURCES
+     src/neural_runtime.cpp
+     src/pose.cpp)
+ list(APPEND MOTIONBRICKS_SOURCES src/root.cpp)
++list(APPEND MOTIONBRICKS_SOURCES src/memory_bundle.cpp)
+ list(APPEND MOTIONBRICKS_SOURCES src/motion_rep.cpp)
+ list(APPEND MOTIONBRICKS_SOURCES src/planner.cpp)
+ list(APPEND MOTIONBRICKS_SOURCES src/sampling.cpp)
+ list(APPEND MOTIONBRICKS_SOURCES src/style.cpp)
+ list(APPEND MOTIONBRICKS_SOURCES src/agent.cpp)
+-list(APPEND MOTIONBRICKS_SOURCES src/sonic.cpp)
+-list(APPEND MOTIONBRICKS_SOURCES src/sonic_physics.cpp)
++if(MOTIONBRICKS_ENABLE_SONIC)
++    list(APPEND MOTIONBRICKS_SOURCES src/sonic.cpp)
++    list(APPEND MOTIONBRICKS_SOURCES src/sonic_physics.cpp)
++endif()
+ 
+ add_library(motionbricks_shared SHARED ${MOTIONBRICKS_SOURCES})
+ add_library(motionbricks::motionbricks ALIAS motionbricks_shared)
+diff --git a/src/error.hpp b/src/error.hpp
+index 4916da3..7eb6645 100644
+--- a/src/error.hpp
++++ b/src/error.hpp
+@@ -13,6 +13,7 @@ void write_error(char * output, std::uint64_t capacity, std::string_view message
+ 
+ template <class Function>
+ mb_status guard(char * error, std::uint64_t error_capacity, Function && function) noexcept {
++#if defined(__cpp_exceptions)
+     try {
+         write_error(error, error_capacity, {});
+         return function();
+@@ -26,6 +27,11 @@ mb_status guard(char * error, std::uint64_t error_capacity, Function && function
+         write_error(error, error_capacity, "unknown internal error");
+         return MB_INTERNAL_ERROR;
+     }
++#else
++    // Exception-free builds (WASI component): allocation failure aborts instead of returning.
++    write_error(error, error_capacity, {});
++    return function();
++#endif
+ }
+ 
+ mb_status fail(mb_status status, char * error, std::uint64_t error_capacity,
+diff --git a/src/memory_bundle.cpp b/src/memory_bundle.cpp
+new file mode 100644
+index 0000000..cf0ae9e
+--- /dev/null
++++ b/src/memory_bundle.cpp
+@@ -0,0 +1,77 @@
++#include "memory_bundle.hpp"
++
++#include <cstdint>
++#include <cstring>
++#include <memory>
++#include <string>
++#include <string_view>
++#include <vector>
++
++namespace motionbricks::detail {
++
++namespace {
++
++struct registered_file {
++    std::string name;
++    std::unique_ptr<std::byte[]> storage;
++    memory_file view;
++};
++
++std::vector<registered_file> & registry() {
++    static std::vector<registered_file> files;
++    return files;
++}
++
++registered_file * find_registered(std::string_view name) {
++    for (auto & file : registry()) {
++        if (file.name == name) return &file;
++    }
++    return nullptr;
++}
++
++} // namespace
++
++bool memory_bundle_active() noexcept {
++    return !registry().empty();
++}
++
++const memory_file * find_memory_file(const std::filesystem::path & path) noexcept {
++    const auto * file = find_registered(path.filename().string());
++    return file == nullptr ? nullptr : &file->view;
++}
++
++} // namespace motionbricks::detail
++
++extern "C" {
++
++int mb_memory_file_begin(const char * name, uint64_t size) {
++    if (name == nullptr || size == 0U || size > SIZE_MAX / 2U) return -1;
++    auto & files = motionbricks::detail::registry();
++    for (auto it = files.begin(); it != files.end(); ++it) {
++        if (it->name == name) {
++            files.erase(it);
++            break;
++        }
++    }
++    const auto bytes = static_cast<std::size_t>(size);
++    auto storage = std::make_unique<std::byte[]>(bytes);
++    const auto * data = storage.get();
++    files.push_back({name, std::move(storage), {data, bytes}});
++    return 0;
++}
++
++int mb_memory_file_write(const char * name, uint64_t offset, const void * data, uint64_t count) {
++    if (name == nullptr || (data == nullptr && count != 0U)) return -1;
++    auto * file = motionbricks::detail::find_registered(name);
++    if (file == nullptr || offset > file->view.size || count > file->view.size - offset) return -1;
++    if (count != 0U) {
++        std::memcpy(file->storage.get() + offset, data, static_cast<std::size_t>(count));
++    }
++    return 0;
++}
++
++void mb_memory_files_clear(void) {
++    motionbricks::detail::registry().clear();
++}
++
++}
+diff --git a/src/memory_bundle.hpp b/src/memory_bundle.hpp
+new file mode 100644
+index 0000000..50af395
+--- /dev/null
++++ b/src/memory_bundle.hpp
+@@ -0,0 +1,34 @@
++#pragma once
++
++// Bundle files supplied as bytes by a host without filesystem access (the WASI component).
++// A registered file answers for any path with the same file name, so the loader's
++// `<bundle>/<component>.gguf` paths resolve to the registered bytes. Native builds never register.
++
++#include <cstddef>
++#include <cstdint>
++#include <filesystem>
++
++namespace motionbricks::detail {
++
++struct memory_file {
++    const std::byte * data;
++    std::size_t size;
++};
++
++// True once any file has been registered.
++bool memory_bundle_active() noexcept;
++
++// The registered file named like path's file name, or nullptr.
++const memory_file * find_memory_file(const std::filesystem::path & path) noexcept;
++
++} // namespace motionbricks::detail
++
++extern "C" {
++
++// Host API for the component glue. Each returns 0 on success and -1 on failure.
++// Registering a name again replaces it. Chunks may arrive in any order within bounds.
++int mb_memory_file_begin(const char * name, uint64_t size);
++int mb_memory_file_write(const char * name, uint64_t offset, const void * data, uint64_t count);
++void mb_memory_files_clear(void);
++
++}
+diff --git a/src/model.cpp b/src/model.cpp
+index b2f0fac..d2f9aa4 100644
+--- a/src/model.cpp
++++ b/src/model.cpp
+@@ -15,6 +15,8 @@
+ #include <utility>
+ #include <vector>
+ 
++#include "memory_bundle.hpp"
++
+ #if defined(MOTIONBRICKS_HAVE_GGML)
+ #include <ggml.h>
+ #include <gguf.h>
+@@ -139,14 +141,17 @@ std::vector<std::string> split_names(std::string_view value) {
+ 
+ mb_status load_component(const std::filesystem::path & path, const component_spec & spec,
+                          mb_model & output, std::string & reason) {
+-    if (!std::filesystem::is_regular_file(path)) {
++    const auto * memory = find_memory_file(path);
++    if (memory == nullptr && !std::filesystem::is_regular_file(path)) {
+         reason = "missing GGUF component: " + path.string();
+         return MB_IO_ERROR;
+     }
+ 
+     ggml_context * raw_ggml = nullptr;
+     const gguf_init_params params{!spec.load_data, &raw_ggml};
+-    gguf_ptr gguf(gguf_init_from_file(path.string().c_str(), params));
++    gguf_ptr gguf(memory != nullptr
++                      ? gguf_init_from_buffer(memory->data, memory->size, params)
++                      : gguf_init_from_file(path.string().c_str(), params));
+     ggml_ptr ggml(raw_ggml);
+     if (!gguf || !ggml) {
+         reason = "could not parse GGUF component: " + path.string();
+@@ -260,7 +265,7 @@ mb_status load_model_bundle(const std::filesystem::path & directory,
+     return MB_BACKEND_UNAVAILABLE;
+ #else
+     std::error_code error;
+-    if (!std::filesystem::is_directory(directory, error)) {
++    if (!memory_bundle_active() && !std::filesystem::is_directory(directory, error)) {
+         reason = error ? "cannot access model bundle: " + error.message()
+                        : "model bundle is not a directory: " + directory.string();
+         return MB_IO_ERROR;
+diff --git a/src/neural_runtime.cpp b/src/neural_runtime.cpp
+index 5fb6e37..3f4ec39 100644
+--- a/src/neural_runtime.cpp
++++ b/src/neural_runtime.cpp
+@@ -1,4 +1,5 @@
+ #include "neural_runtime.hpp"
++#include "memory_bundle.hpp"
+ 
+ #include <algorithm>
+ #include <array>
+@@ -74,9 +75,10 @@ std::filesystem::path backend_library_directory() {
+ 
+ bool copy_gguf_data(const std::filesystem::path & path, ggml_context * tensors,
+                     const gguf_context * metadata, std::string & reason) {
++    const auto * memory = find_memory_file(path);
+     std::unique_ptr<std::FILE, decltype(&std::fclose)> file(
+-        std::fopen(path.string().c_str(), "rb"), &std::fclose);
+-    if (!file) {
++        memory == nullptr ? std::fopen(path.string().c_str(), "rb") : nullptr, &std::fclose);
++    if (memory == nullptr && !file) {
+         reason = "cannot open GGUF weights: " + path.string();
+         return false;
+     }
+@@ -90,12 +92,20 @@ bool copy_gguf_data(const std::filesystem::path & path, ggml_context * tensors,
+             return false;
+         }
+         const auto offset = gguf_get_data_offset(metadata) + gguf_get_tensor_offset(metadata, index);
++        const auto bytes = ggml_nbytes(tensor);
++        if (memory != nullptr) {
++            if (offset > memory->size || bytes > memory->size - offset) {
++                reason = std::string("truncated tensor data: ") + name;
++                return false;
++            }
++            ggml_backend_tensor_set(tensor, memory->data + offset, 0, bytes);
++            continue;
++        }
+         if (offset > static_cast<std::size_t>(std::numeric_limits<long>::max()) ||
+             std::fseek(file.get(), static_cast<long>(offset), SEEK_SET) != 0) {
+             reason = std::string("cannot seek to tensor data: ") + name;
+             return false;
+         }
+-        const auto bytes = ggml_nbytes(tensor);
+         for (std::size_t position = 0; position < bytes; position += staging.size()) {
+             const auto amount = std::min(staging.size(), bytes - position);
+             if (std::fread(staging.data(), 1, amount, file.get()) != amount) {
+@@ -129,7 +139,10 @@ mb_status open_component(neural_runtime & runtime, const std::filesystem::path &
+                          std::string name, std::string & reason) {
+     ggml_context * raw_context = nullptr;
+     const gguf_init_params params{true, &raw_context};
+-    gguf_ptr metadata(gguf_init_from_file(path.string().c_str(), params));
++    const auto * memory = find_memory_file(path);
++    gguf_ptr metadata(memory != nullptr
++                          ? gguf_init_from_buffer(memory->data, memory->size, params)
++                          : gguf_init_from_file(path.string().c_str(), params));
+     context_ptr context(raw_context);
+     if (!metadata || !context) {
+         reason = "cannot initialize GGUF weights: " + path.string();
+@@ -151,7 +164,11 @@ mb_status initialize_backend(neural_runtime & runtime, mb_device selected,
+     // GGML's process-wide registry and backend discovery are not thread-safe.
+     static std::mutex registry_mutex;
+     const std::lock_guard lock(registry_mutex);
++#if defined(__cpp_exceptions)
+     try {
++#else
++    {
++#endif
+ #if defined(MOTIONBRICKS_HAVE_VULKAN)
+         // Set these before module discovery, which can initialize Vulkan.
+         // Keep the released F32 model's parity contract on every backend.
+@@ -201,10 +218,14 @@ mb_status initialize_backend(neural_runtime & runtime, mb_device selected,
+             return MB_BACKEND_UNAVAILABLE;
+ #endif
+         }
++#if defined(__cpp_exceptions)
+     } catch (const std::exception & e) {
+         reason = std::string("cannot initialize inference backend: ") + e.what();
+         return MB_BACKEND_UNAVAILABLE;
+     }
++#else
++    }
++#endif
+     if (!runtime.backend) {
+         reason = selected == MB_DEVICE_VULKAN ? "no accessible Vulkan devices/backend"
+                                              : "cannot find or initialize a compatible CPU backend";
+diff --git a/src/transition_debug.hpp b/src/transition_debug.hpp
+index ab56e07..4509e94 100644
+--- a/src/transition_debug.hpp
++++ b/src/transition_debug.hpp
+@@ -23,6 +23,10 @@ inline void write_transition_debug(const char * directory, const mb_agent & agen
+                                   const mb_motion & output) {
+     static std::atomic<unsigned long long> sequence{0};
+     const auto id=sequence.fetch_add(1);
++#if !defined(__cpp_exceptions)
++    (void)agent; (void)canonical; (void)trace; (void)decoded_roots; (void)world_roots; (void)output;
++    std::fprintf(stderr,"Transition trace unavailable without C++ exceptions: %s (id %llu)\n",directory,id);
++#else
+     try {
+         const auto path=std::filesystem::path(directory)/("transition-"+std::to_string(id)+".json");
+         // The caller creates the diagnostic directory explicitly.
+@@ -81,5 +85,6 @@ inline void write_transition_debug(const char * directory, const mb_agent & agen
+     } catch (const std::exception & error) {
+         std::fprintf(stderr,"Transition trace failed: %s\n",error.what());
+     }
++#endif
+ }
+ }

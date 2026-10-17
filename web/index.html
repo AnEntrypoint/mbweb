@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>MotionBricks stick figure</title>
+    <meta name="description" content="A stick figure driven by motion-bricks inference running as a WASIp3 component in the browser.">
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="./style.css">
+</head>
+<body data-state="loading">
+    <main>
+        <h1>MotionBricks stick figure</h1>
+        <p class="lede">
+            Motion comes from the motion-bricks G1 model, compiled to a WASI Preview 3 component and run in
+            this page. The model weights are fetched from Hugging Face, checked against their SHA-256, and cached.
+        </p>
+
+        <div class="stage-wrap">
+            <canvas id="stage" aria-label="Stick figure animated from generated motion"></canvas>
+        </div>
+
+        <progress id="progress" max="1" value="0" aria-label="Model download progress"></progress>
+        <p id="status" role="status" aria-live="polite">Starting</p>
+
+        <div class="controls">
+            <button id="generate" type="button" disabled>Generate motion</button>
+            <button id="play" type="button" disabled aria-pressed="true">Pause</button>
+            <label class="scrubber">
+                <span>Frame</span>
+                <input id="scrub" type="range" min="0" max="0" value="0" step="1" disabled>
+            </label>
+        </div>
+        <p id="frame-label" class="meta"></p>
+    </main>
+    <script type="module" src="./app.js"></script>
+</body>
+</html>

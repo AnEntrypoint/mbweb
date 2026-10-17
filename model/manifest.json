@@ -1,0 +1,11 @@
+{
+  "repository": "LocalAI-io/MotionBricks-G1-GGML",
+  "revision": "cc2a47603dbc203a4f18f35dd06ed3611833f506",
+  "base_url": "https://huggingface.co/LocalAI-io/MotionBricks-G1-GGML/resolve/cc2a47603dbc203a4f18f35dd06ed3611833f506/",
+  "files": [
+    { "path": "g1-f32/support.gguf", "bytes": 5472, "sha256": "5d41cae4bc494e612ef19e25f599351aafbc9ef1cb46d4ac3f1e42bb7ab07200" },
+    { "path": "g1-f32/root.gguf", "bytes": 136504000, "sha256": "46268d77e5c15449d68a39ce6ec7145e9eb457c5114d5dca934bd3ab539b29db" },
+    { "path": "g1-f32/vq-decoder.gguf", "bytes": 49753440, "sha256": "6a1114b6906b07fab9deb18d602b4e731e1b5794318b1643ffd0605692f62d1e" },
+    { "path": "g1-f32/pose.gguf", "bytes": 546369984, "sha256": "6db82e5a67a355052f283bbcab104b71ecfc333dc8d9017c3812eb6f9650756e" }
+  ]
+}
