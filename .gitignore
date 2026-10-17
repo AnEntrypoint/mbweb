@@ -8,3 +8,4 @@ component/gen/
 
 # Model weights are fetched at runtime from Hugging Face, never committed
 *.gguf
+.env
