@@ -26,7 +26,7 @@ const state = {
     startedAt: 0,
     startFrame: 0,
     generating: false,
-    steer: 0, // pixels of sideways avoidance, relaxing back to zero
+    offset: { x: 0, y: 0 }, // pixels of avoidance, relaxing back to zero
 };
 
 function setStatus(text, stateName) {
@@ -83,7 +83,8 @@ function request(message, transfer = []) {
     });
 }
 
-// Projects the clip once: pelvis-centred, side view (Z horizontal, Y up), one scale for all frames.
+// Projects the clip once: pelvis-centred side view (Z horizontal, Y up), one scale for all frames,
+// and the pelvis path on the ground plane (world X and Z) relative to frame 0.
 function prepareClip(motion) {
     const positions = motionPositions(motion, state.parents, state.neutral);
     let minY = Infinity;
@@ -103,42 +104,42 @@ function prepareClip(motion) {
         }
     }
     const span = Math.max(maxY - minY, maxZ - minZ, 1e-3);
-    // Root travel along the view axis, relative to frame 0 (the clip starts where the figure is).
-    const rootZ0 = positions[2];
-    const rootDisp = new Float32Array(motion.frames);
-    let maxDisp = 0;
+    const pathX = new Float32Array(motion.frames);
+    const pathZ = new Float32Array(motion.frames);
+    let maxPath = 0;
     for (let frame = 0; frame < motion.frames; frame++) {
-        rootDisp[frame] = positions[frame * JOINTS * 3 + 2] - rootZ0;
-        maxDisp = Math.max(maxDisp, Math.abs(rootDisp[frame]));
+        pathX[frame] = positions[frame * JOINTS * 3] - positions[0];
+        pathZ[frame] = positions[frame * JOINTS * 3 + 2] - positions[2];
+        maxPath = Math.max(maxPath, Math.abs(pathX[frame]), Math.abs(pathZ[frame]));
     }
-    // The figure's screen position is a fraction of the width; each clip continues where the last ended.
+    // Each clip starts where the previous one ended, so the figure keeps walking across the page.
     const previous = state.clip;
-    const carry = previous ? wrapUnit(previous.carry + WALK_WIDTH * previous.rootDisp[previous.frames - 1] / (previous.maxDisp || 1e-3)) : 0.5;
-    return { frames: motion.frames, positions, minY, span, rootDisp, maxDisp, carry };
+    const last = previous ? previous.frames - 1 : 0;
+    const carry = previous
+        ? {
+            x: wrapUnit(previous.carry.x + WALK_SPAN * previous.pathX[last] / previous.maxPath),
+            y: wrapUnit(previous.carry.y + WALK_SPAN * previous.pathZ[last] / previous.maxPath),
+        }
+        : { x: 0.5, y: 0.5 };
+    return { frames: motion.frames, positions, minY, span, pathX, pathZ, maxPath: maxPath || 1e-3, carry };
 }
 
-const WALK_WIDTH = 0.35; // a clip's full root travel covers this fraction of the stage width
+// A clip's full pelvis travel covers this fraction of the stage's smaller side.
+const WALK_SPAN = 0.30;
 const wrapUnit = (value) => ((value % 1) + 1) % 1;
 
-// Fixed obstacles as fractions of the stage: x centre, width and height (both fractions).
+// Obstacles as page fractions: top-left corner and size.
 const OBSTACLES = [
-    { x: 0.28, w: 0.05, h: 0.42 },
-    { x: 0.58, w: 0.07, h: 0.30 },
-    { x: 0.84, w: 0.05, h: 0.50 },
+    { x: 0.20, y: 0.52, w: 0.08, h: 0.14 },
+    { x: 0.55, y: 0.66, w: 0.10, h: 0.12 },
+    { x: 0.78, y: 0.30, w: 0.07, h: 0.22 },
 ];
-// Steering: pixels pushed sideways per draw, and the margin kept from obstacles and the mouse.
-const STEER_RATE = 0.18;
-const STEER_RELAX = 0.985;
-const MOUSE_RADIUS = 70;
+// Steering: pixels pushed per draw, the figure's clearance radius, and the mouse avoidance radius.
+const STEER_RATE = 0.25;
+const STEER_RELAX = 0.98;
+const FIGURE_RADIUS = 36;
+const MOUSE_RADIUS = 80;
 const mouse = { x: null, y: null };
-
-// Shortest signed distance from a to b on a wrapping stage.
-const wrapDelta = (a, b, width) => {
-    let d = (b - a) % width;
-    if (d > width / 2) d -= width;
-    if (d < -width / 2) d += width;
-    return d;
-};
 
 function resizeCanvas() {
     const ratio = window.devicePixelRatio || 1;
@@ -150,28 +151,45 @@ function resizeCanvas() {
     drawFrame(state.frame);
 }
 
-// Moves the figure sideways, out of obstacles and away from the mouse; relaxes back when clear.
-function steerAround(centreX, width, height, groundY, bodyHeight, scale) {
-    const halfBody = scale * 0.35;
-    let push = 0;
+// Moves the figure away from obstacles and the mouse; the offset relaxes back when clear.
+function steerAround(cx, cy, width, height) {
+    let px = 0;
+    let py = 0;
     for (const obstacle of OBSTACLES) {
-        const ox = obstacle.x * width;
-        const halfObstacle = (obstacle.w * width) / 2;
-        const obstacleTop = groundY - obstacle.h * height;
-        if (obstacleTop > groundY - bodyHeight) continue; // obstacle is below the figure's torso band
-        const gap = wrapDelta(centreX, ox, width);
-        const clearance = halfBody + halfObstacle + 6;
-        if (Math.abs(gap) < clearance) {
-            push += (gap > 0 ? -1 : 1) * (clearance - Math.abs(gap)) * STEER_RATE;
+        const left = obstacle.x * width - FIGURE_RADIUS;
+        const top = obstacle.y * height - FIGURE_RADIUS;
+        const right = (obstacle.x + obstacle.w) * width + FIGURE_RADIUS;
+        const bottom = (obstacle.y + obstacle.h) * height + FIGURE_RADIUS;
+        if (cx > left && cx < right && cy > top && cy < bottom) {
+            // Leave by the nearest edge.
+            const exits = [
+                { d: cx - left, dx: -1, dy: 0 },
+                { d: right - cx, dx: 1, dy: 0 },
+                { d: cy - top, dx: 0, dy: -1 },
+                { d: bottom - cy, dx: 0, dy: 1 },
+            ];
+            const exit = exits.reduce((best, option) => (option.d < best.d ? option : best));
+            px += exit.dx * (exit.d + 1) * STEER_RATE;
+            py += exit.dy * (exit.d + 1) * STEER_RATE;
         }
     }
-    if (mouse.x !== null && mouse.y !== null && mouse.y > groundY - bodyHeight && mouse.y <= groundY) {
-        const gap = wrapDelta(centreX, mouse.x, width);
-        if (Math.abs(gap) < MOUSE_RADIUS) {
-            push += (gap > 0 ? -1 : 1) * (MOUSE_RADIUS - Math.abs(gap)) * STEER_RATE;
+    if (mouse.x !== null) {
+        const dx = cx - mouse.x;
+        const dy = cy - mouse.y;
+        const distance = Math.hypot(dx, dy);
+        if (distance < MOUSE_RADIUS && distance > 0) {
+            const push = (MOUSE_RADIUS - distance) * STEER_RATE;
+            px += (dx / distance) * push;
+            py += (dy / distance) * push;
         }
     }
-    state.steer = push !== 0 ? state.steer + push : state.steer * STEER_RELAX;
+    if (px !== 0 || py !== 0) {
+        state.offset.x += px;
+        state.offset.y += py;
+    } else {
+        state.offset.x *= STEER_RELAX;
+        state.offset.y *= STEER_RELAX;
+    }
 }
 
 function drawFrame(frame) {
@@ -181,54 +199,49 @@ function drawFrame(frame) {
     ctx.fillRect(0, 0, width, height);
     if (!state.clip) return;
 
-    const { positions, minY, span, rootDisp, maxDisp, carry } = state.clip;
-    const scale = (Math.min(width, height) * 0.8) / span;
-    const groundY = height * 0.88;
+    const { positions, minY, span, pathX, pathZ, maxPath, carry } = state.clip;
+    const scale = (Math.min(width, height) * 0.3) / span;
     const base = frame * JOINTS * 3;
     const pelvisZ = positions[base + 2];
-    const walkX = wrapUnit(carry + WALK_WIDTH * rootDisp[frame] / (maxDisp || 1e-3)) * width;
-    const bodyHeight = (groundY - 0) * 0.62; // figure height in pixels for the steering bands
-    const centreX = ((walkX + state.steer) % width + width) % width;
-    steerAround(centreX, width, height, groundY, bodyHeight, scale);
-    const toScreen = (joint, offset) => {
-        const x = centreX + offset + (positions[base + joint * 3 + 2] - pelvisZ) * scale;
-        const y = groundY - (positions[base + joint * 3 + 1] - minY) * scale;
-        return [x, y];
-    };
+    const pelvisY = positions[base + 1];
 
-    ctx.strokeStyle = getComputedStyle(document.body).getPropertyValue('--ground').trim() || '#b9b3a6';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(0, groundY);
-    ctx.lineTo(width, groundY);
-    ctx.stroke();
+    // Pelvis position on the page: the clip's ground-plane path, wrapped around the stage.
+    const fx = carry.x + WALK_SPAN * pathX[frame] / maxPath;
+    const fy = carry.y + WALK_SPAN * pathZ[frame] / maxPath;
+    const cx = wrapUnit(fx) * width + state.offset.x;
+    const cy = wrapUnit(fy) * height + state.offset.y;
+    steerAround(cx, cy, width, height);
 
     ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--ground').trim() || '#b9b3a6';
     for (const obstacle of OBSTACLES) {
-        const w = obstacle.w * width;
-        const h = obstacle.h * height;
-        ctx.fillRect(obstacle.x * width - w / 2, groundY - h, w, h);
+        ctx.fillRect(obstacle.x * width, obstacle.y * height, obstacle.w * width, obstacle.h * height);
     }
 
     ctx.strokeStyle = getComputedStyle(document.body).getPropertyValue('--ink').trim() || '#1d1b18';
+    ctx.fillStyle = ctx.strokeStyle;
     ctx.lineWidth = Math.max(2, scale * 0.04);
     ctx.lineCap = 'round';
-    for (const offset of [-width, 0, width]) {
-        ctx.beginPath();
-        for (let joint = 1; joint < JOINTS; joint++) {
-            const [px, py] = toScreen(state.parents[joint], offset);
-            const [cx, cy] = toScreen(joint, offset);
-            ctx.moveTo(px, py);
-            ctx.lineTo(cx, cy);
-        }
-        ctx.stroke();
-
-        ctx.fillStyle = ctx.strokeStyle;
-        for (let joint = 0; joint < JOINTS; joint++) {
-            const [x, y] = toScreen(joint, offset);
+    // Side view of the skeleton at the pelvis position; copies one stage away keep it whole at the edges.
+    const toScreen = (joint, dx, dy) => [
+        cx + dx + (positions[base + joint * 3 + 2] - pelvisZ) * scale,
+        cy + dy - (positions[base + joint * 3 + 1] - pelvisY) * scale,
+    ];
+    for (const dx of [-width, 0, width]) {
+        for (const dy of [-height, 0, height]) {
             ctx.beginPath();
-            ctx.arc(x, y, Math.max(2.5, scale * 0.045), 0, Math.PI * 2);
-            ctx.fill();
+            for (let joint = 1; joint < JOINTS; joint++) {
+                const [px, py] = toScreen(state.parents[joint], dx, dy);
+                const [qx, qy] = toScreen(joint, dx, dy);
+                ctx.moveTo(px, py);
+                ctx.lineTo(qx, qy);
+            }
+            ctx.stroke();
+            for (let joint = 0; joint < JOINTS; joint++) {
+                const [x, y] = toScreen(joint, dx, dy);
+                ctx.beginPath();
+                ctx.arc(x, y, Math.max(2.5, scale * 0.045), 0, Math.PI * 2);
+                ctx.fill();
+            }
         }
     }
 
