@@ -188,14 +188,19 @@ function updateBody(now, width, height, speedPx, playing) {
     const nx = body.x + Math.cos(body.heading) * speedPx;
     const ny = body.y + Math.sin(body.heading) * speedPx;
     // Stay on the stage: bounce off the edges (kept clear of the figure's height) and turn around.
-    const margin = Math.min(width, height) * 0.22;
+    // The pelvis is the body's anchor: the head sits about 0.32 of the short side above it, the feet below.
+    const side = Math.min(width, height);
+    const left = side * 0.2;
+    const right = width - side * 0.2;
+    const top = side * 0.36;
+    const bottom = height - side * 0.06;
     let bounced = false;
-    if (nx < margin || nx > width - margin) { body.heading = Math.PI - body.heading; bounced = true; }
-    if (ny < margin || ny > height - margin) { body.heading = -body.heading; bounced = true; }
+    if (nx < left || nx > right) { body.heading = Math.PI - body.heading; bounced = true; }
+    if (ny < top || ny > bottom) { body.heading = -body.heading; bounced = true; }
     if (bounced) body.turnRate = 0;
     if (!insideObstacle(nx, ny, width, height)) {
-        body.x = Math.min(width - margin, Math.max(margin, nx));
-        body.y = Math.min(height - margin, Math.max(margin, ny));
+        body.x = Math.min(right, Math.max(left, nx));
+        body.y = Math.min(bottom, Math.max(top, ny));
     }
 }
 
