@@ -28,7 +28,7 @@ from ternary_qat import absmean_ternary  # noqa: E402
 GGUF_MAGIC = b"GGUF"
 GGUF_VERSION = 3
 ALIGNMENT = 32
-TYPE_F16, TYPE_Q8_0, TYPE_TQ1_0 = 1, 8, 34
+TYPE_F32, TYPE_F16, TYPE_Q8_0, TYPE_TQ1_0 = 0, 1, 8, 34
 GGUF_TYPE_UINT32, GGUF_TYPE_STRING = 4, 8
 QK_K = 256
 POW3 = [1, 3, 9, 27, 81]
@@ -117,8 +117,14 @@ def _align(n):
     return (n + ALIGNMENT - 1) // ALIGNMENT * ALIGNMENT
 
 
+# Tensors the C++ loader validates by exact type (motion-bricks.cpp src/model.cpp tensor_shape).
+F32_NAMES = {"_position_emb.embed", "_proj_pose_output_logit.weight", "_pose_token_emb.weight"}
+
+
 def choose_type(name, shape, keep_fp):
     rows, cols = shape
+    if name in F32_NAMES:
+        return TYPE_F32
     if any(s in name for s in keep_fp):
         return TYPE_Q8_0 if cols % 32 == 0 else TYPE_F16
     if cols % QK_K == 0:
@@ -130,6 +136,8 @@ def choose_type(name, shape, keep_fp):
 
 def build_tensor_bytes(name, tensor, gtype):
     t = tensor.detach().float()
+    if gtype == TYPE_F32:
+        return t.numpy().astype(np.float32).tobytes()
     if gtype == TYPE_F16:
         return t.half().numpy().tobytes()
     rows, cols = t.shape
@@ -148,6 +156,8 @@ def build_tensor_bytes(name, tensor, gtype):
 
 
 def tensor_nbytes(gtype, shape):
+    if gtype == TYPE_F32:
+        return int(np.prod(shape)) * 4
     if gtype == TYPE_TQ1_0:
         rows, cols = shape
         return rows * (cols // QK_K) * 54
@@ -193,7 +203,8 @@ def export(ckpt_path, out_path):
         if name.endswith(".parametrizations.in_proj_weight.original"):
             name = name[: -len(".parametrizations.in_proj_weight.original")] + ".in_proj_weight"
         if t.dim() != 2 or not (name.endswith(".weight") or name.endswith(".in_proj_weight")):
-            tensors.append((name, TYPE_F16, tuple(t.shape), t.detach().half().numpy().tobytes()))
+            gtype = TYPE_F32 if name in F32_NAMES else TYPE_F16
+            tensors.append((name, gtype, tuple(t.shape), build_tensor_bytes(name, t, gtype)))
             continue
         gtype = choose_type(name, t.shape, keep_fp)
         tensors.append((name, gtype, tuple(t.shape), build_tensor_bytes(name, t, gtype)))
