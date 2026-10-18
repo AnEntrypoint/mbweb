@@ -86,10 +86,6 @@ function request(message, transfer = []) {
 // Projects the clip once: pelvis-centred side view (Z horizontal, Y up), one scale for all frames.
 function prepareClip(motion) {
     const positions = motionPositions(motion, state.parents, state.neutral);
-    {
-        const last = (motion.frames - 1) * JOINTS * 3;
-        window.__lastDisplacement = [positions[last] - positions[0], positions[last + 2] - positions[2]];
-    }
     let minY = Infinity;
     let maxY = -Infinity;
     let minZ = Infinity;
@@ -342,9 +338,7 @@ function steeredGlobalRoot(globalRoot) {
     }
     return out;
 }
-// TEMPORARY test hooks for the root-direction check; removed once verified.
-window.__setHeading = (angle) => { state.steerHeading = angle; };
-window.__lastDisplacement = null;
+
 
 function startPlayback() {
     state.playing = true;
