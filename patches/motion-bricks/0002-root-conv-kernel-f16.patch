@@ -1,0 +1,11 @@
+--- a/src/model.cpp
++++ b/src/model.cpp
+@@ -209,7 +209,7 @@
+     } else if (std::string_view(spec.name) == "root") {
+         if (!tensor_shape(gguf.get(), "_position_emb.embed", {512, 1, 16, 1}, GGML_TYPE_F32, reason) ||
+             !tensor_shape(gguf.get(), "_proj_num_token_output_logit.weight", {512, 12, 1, 1}, GGML_TYPE_F32, reason) ||
+-            !tensor_shape(gguf.get(), "_conv_output.model.6.weight", {3, 512, 5, 1}, GGML_TYPE_F32, reason))
++            !tensor_shape(gguf.get(), "_conv_output.model.6.weight", {3, 512, 5, 1}, GGML_TYPE_F32, reason, GGML_TYPE_F16))
+             return MB_INCOMPATIBLE_MODEL;
+     } else if (std::string_view(spec.name) == "vq-decoder") {
+         if (!tensor_shape(gguf.get(), "quantizer.vq._codebook.embed", {32, 10, 8, 1}, GGML_TYPE_F32, reason) ||

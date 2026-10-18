@@ -265,11 +265,12 @@ def export(ckpt_path, out_path, component="pose"):
             continue  # upstream bookkeeping flag, dropped by scripts/convert_to_gguf.py
         if name.endswith(".parametrizations.in_proj_weight.original"):
             name = name[: -len(".parametrizations.in_proj_weight.original")] + ".in_proj_weight"
-        if t.dim() != 2 or not (name.endswith(".weight") or name.endswith(".in_proj_weight")):
+        if t.dim() == 3 and name.startswith("_conv_output"):
+            gtype = TYPE_F16  # root conv kernels; patches/motion-bricks/0002 accepts F16
+        elif t.dim() != 2 or not (name.endswith(".weight") or name.endswith(".in_proj_weight")):
             gtype = TYPE_F32  # ggml_add with an F16 bias aborts; upstream keeps these F32
-            tensors.append((name, gtype, tuple(t.shape), build_tensor_bytes(name, t, gtype)))
-            continue
-        gtype = choose_type(name, t.shape, keep_fp)
+        else:
+            gtype = choose_type(name, t.shape, keep_fp)
         tensors.append((compact_name(name), gtype, tuple(t.shape), build_tensor_bytes(name, t, gtype)))
     write_gguf(out_path, tensors, component_metadata(component, tensors, ckpt_path))
     return sum(len(p) for _, _, _, p in tensors)
@@ -288,6 +289,9 @@ def _quant_type_for(name, shape, mode):
     """mode 'q8': every eligible linear Q8_0, the rest F32/F16. mode 'f32': everything F32."""
     if mode == "f32":
         return TYPE_F32
+    if len(shape) == 3 and name.startswith("_conv_output"):
+        # root conv kernels: F16 (patches/motion-bricks/0002 accepts it); mul_mat reads them directly
+        return TYPE_F16
     if name in F32_NAMES or len(shape) != 2 or not (name.endswith(".weight") or name.endswith(".in_proj_weight")):
         return TYPE_F32
     return TYPE_Q8_0 if shape[1] % 32 == 0 else TYPE_F32
