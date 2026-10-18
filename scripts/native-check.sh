@@ -41,3 +41,12 @@ for f in m["files"]:
 ' "$ROOT/model/manifest.json")
 
 "$BUILD/standing" "$CACHE/model/g1-f32"
+
+# Ternary bundle (model/ternary): the same standing check on our GGUF files, so a native abort
+# prints its ggml message instead of the WASM trap. Root parts are joined before loading.
+TERN="$ROOT/build/ternary-bundle"
+rm -rf "$TERN" && mkdir -p "$TERN"
+cp "$ROOT/model/ternary/pose.gguf" "$ROOT/model/ternary/vq-decoder.gguf" "$ROOT/model/ternary/support.gguf" "$TERN/"
+cat "$ROOT/model/ternary/root.gguf.part-00" "$ROOT/model/ternary/root.gguf.part-01" > "$TERN/root.gguf"
+"$BUILD/standing" "$TERN" >&2
+echo "native ternary standing: PASS" >&2
