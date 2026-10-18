@@ -1,0 +1,15 @@
+--- a/src/root.cpp
++++ b/src/root.cpp
+@@ -110,9 +110,11 @@
+                    ggml_tensor * kernel, ggml_tensor * bias, int padding, int dilation) {
+     auto * columns = ggml_im2col(context, kernel, input, 1, 0, padding, 0,
+                                 dilation, 0, false, GGML_TYPE_F32);
++    // F16-stored kernels (patches/motion-bricks/0002) are cast to F32: mul_mat takes F32 here.
++    auto * weights = kernel->type == GGML_TYPE_F32 ? kernel : ggml_cast(context, kernel, GGML_TYPE_F32);
+     auto * output = ggml_mul_mat(context,
+         ggml_reshape_2d(context, columns, columns->ne[0], columns->ne[2] * columns->ne[1]),
+-        ggml_reshape_2d(context, kernel, kernel->ne[0] * kernel->ne[1], kernel->ne[2]));
++        ggml_reshape_2d(context, weights, weights->ne[0] * weights->ne[1], weights->ne[2]));
+     output = ggml_reshape_3d(context, output, columns->ne[1], kernel->ne[2], columns->ne[2]);
+     return ggml_add(context, output, ggml_reshape_2d(context, bias, 1, bias->ne[0]));
+ }
