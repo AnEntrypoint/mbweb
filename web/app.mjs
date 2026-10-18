@@ -102,8 +102,32 @@ function prepareClip(motion) {
         }
     }
     const span = Math.max(maxY - minY, maxZ - minZ, 1e-3);
-    return { frames: motion.frames, positions, minY, span };
+    // Pelvis travel per frame on the ground plane: the gait's own speed, so the body moves with its feet.
+    const speed = new Float32Array(motion.frames);
+    for (let frame = 1; frame < motion.frames; frame++) {
+        const base = frame * JOINTS * 3;
+        const prev = base - JOINTS * 3;
+        speed[frame] = Math.hypot(positions[base] - positions[prev], positions[base + 2] - positions[prev + 2]);
+    }
+    speed[0] = speed[1] ?? 0; // the loop point has no real previous frame
+    return { frames: motion.frames, positions, minY, span, speed };
 }
+
+const wrapUnit = (value) => ((value % 1) + 1) % 1;
+
+// Obstacles as page fractions: top-left corner and size.
+const OBSTACLES = [
+    { x: 0.20, y: 0.52, w: 0.08, h: 0.14 },
+    { x: 0.55, y: 0.66, w: 0.10, h: 0.12 },
+    { x: 0.78, y: 0.30, w: 0.07, h: 0.22 },
+];
+const FIGURE_RADIUS = 36; // clearance kept around obstacles, in pixels
+const LOOK_AHEAD = 70; // how far ahead the figure checks for obstacles
+const MOUSE_RADIUS = 90; // the mouse pushes the figure only when this close to its body
+const TURN_RATE = 1.8; // radians per second when turning toward a destination or away from a block
+const WANDER = 1.1; // how strongly the heading drifts while wandering
+const mouse = { x: null, y: null };
+const body = { x: null, y: null, heading: 0, turnRate: 0, last: 0, target: null };
 
 function resizeCanvas() {
     const ratio = window.devicePixelRatio || 1;
@@ -127,8 +151,10 @@ function turnToward(current, goal, maxStep) {
     return current + Math.max(-maxStep, Math.min(maxStep, difference));
 }
 
-// Walks the figure: wanders, heads for a clicked destination, and turns away from obstacles and the mouse.
-function updateBody(now, width, height) {
+// Walks the figure. Distance per drawn frame is the generated clip's own pelvis travel, scaled to the
+// page; the heading wanders with inertia, heads for a clicked destination, and turns away from obstacles
+// and from the mouse when it is close to the body. The body only moves while the clip plays.
+function updateBody(now, width, height, speedPx, playing) {
     const dt = body.last ? Math.min(0.1, (now - body.last) / 1000) : 0;
     body.last = now;
     if (body.x === null) {
@@ -139,26 +165,28 @@ function updateBody(now, width, height) {
     if (body.target) {
         const toTarget = Math.atan2(body.target.y - body.y, body.target.x - body.x);
         body.heading = turnToward(body.heading, toTarget, TURN_RATE * dt);
+        body.turnRate = 0;
         if (Math.hypot(body.target.x - body.x, body.target.y - body.y) < 24) body.target = null;
     } else {
-        body.heading += (Math.random() - 0.5) * 0.8 * dt;
+        body.turnRate += (Math.random() - 0.5) * WANDER * dt;
+        body.turnRate *= Math.exp(-1.2 * dt);
+        body.heading += body.turnRate * dt;
     }
-    // Look ahead: if the way is blocked, turn toward whichever side is clear.
+    // The mouse turns the figure away only when the pointer is close to its body.
+    if (mouse.x !== null && Math.hypot(mouse.x - body.x, mouse.y - body.y) < MOUSE_RADIUS) {
+        const away = Math.atan2(body.y - mouse.y, body.x - mouse.x);
+        body.heading = turnToward(body.heading, away, TURN_RATE * dt);
+    }
+    // Obstacles ahead: turn toward whichever side is clear, and do not walk into them.
     const ahead = (angle) => [body.x + Math.cos(angle) * LOOK_AHEAD, body.y + Math.sin(angle) * LOOK_AHEAD];
-    const blocked = (angle) => {
-        const [ax, ay] = ahead(angle);
-        return insideObstacle(ax, ay, width, height) ||
-            (mouse.x !== null && Math.hypot(ax - mouse.x, ay - mouse.y) < MOUSE_RADIUS);
-    };
-    if (blocked(body.heading)) {
-        const left = blocked(body.heading - 0.7) ? 1 : 0;
-        const right = blocked(body.heading + 0.7) ? 1 : 0;
+    if (insideObstacle(...ahead(body.heading), width, height)) {
+        const left = insideObstacle(...ahead(body.heading - 0.7), width, height) ? 1 : 0;
+        const right = insideObstacle(...ahead(body.heading + 0.7), width, height) ? 1 : 0;
         body.heading += (left <= right ? -1 : 1) * TURN_RATE * 2 * dt;
     }
-    const speed = WALK_SPEED * Math.min(width, height);
-    const nx = body.x + Math.cos(body.heading) * speed * dt;
-    const ny = body.y + Math.sin(body.heading) * speed * dt;
-    // Walk only into free space; otherwise stay and turn next frame.
+    if (!playing || speedPx <= 0) return;
+    const nx = body.x + Math.cos(body.heading) * speedPx;
+    const ny = body.y + Math.sin(body.heading) * speedPx;
     if (!insideObstacle(nx, ny, width, height)) {
         body.x = ((nx % width) + width) % width;
         body.y = ((ny % height) + height) % height;
@@ -177,7 +205,12 @@ function drawFrame(frame) {
     const base = frame * JOINTS * 3;
     const pelvisZ = positions[base + 2];
     const pelvisY = positions[base + 1];
-    updateBody(performance.now(), width, height);
+    // Frames stepped since the last draw; the loop point (wrap-around) is not travel.
+    const steps = (frame - state.frame + state.clip.frames) % state.clip.frames;
+    const speedPx = steps > 0 && steps < state.clip.frames / 2
+        ? state.clip.speed[frame] * steps * (Math.min(width, height) * 0.3) / span
+        : 0;
+    updateBody(performance.now(), width, height, speedPx, state.playing);
     const cx = body.x;
     const cy = body.y;
     // Face the direction of travel: mirror the side view when walking left.
