@@ -72,3 +72,12 @@ the same training run kept full precision, not the pretrained model.
 Ternary matches or slightly beats the full-precision control on both seeds (one run per seed,
 100 held-out clips). The 3-D convolution kernels stay F32; the other root linears are ternary
 (TQ1_0) or Q8_0 for kept first and last blocks and the output projection.
+
+## Root conv kernels stored F16: precision and cost (measured)
+
+- Held-out loss (100 clips, trained root): F32 conv kernels 2.04628; F16 round-trip of the same
+  kernels 2.04628 (difference below the 5-decimal resolution). The round-trip changes the kernels by at
+  most 9.5e-4 absolute and 2.1e-4 relative per kernel.
+- Cast cost: converting all 21 root conv kernels from F16 to F32 takes about 34 ms per inference on one
+  CPU thread (measured in Python; the C runtime's cast is not measured here). The cast runs once per
+  conv call, not once per model load.
