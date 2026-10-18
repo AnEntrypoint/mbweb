@@ -38,3 +38,22 @@ Producing a ternary G1 is feasible, but the checked evidence says it gains littl
 - Whether `llama-quantize` handles non-LLM tensor layouts.
 - Vulkan `supports_op` coverage for TQ types.
 - The DS dataset `yolkarian/motionbricks-checkpoints` was not inspected. Private or unindexed repos are invisible, and GitHub code search may miss LFS files.
+
+## Corrected results (held-out, 100 BONES-SEED clips, full archive QAT, 3000 steps)
+
+Earlier numbers in this report came from a fast-path evaluation bug: PyTorch's fused transformer
+path bypassed the ternary forward during held-out evaluation. Those numbers are withdrawn. The
+figures below use the real forward, and the addition-only form matches the dense ternary model
+exactly.
+
+| Config | Held-out loss | vs full precision (0.743) |
+|---|---|---|
+| All linears and attention in_proj ternary | 0.780 | +5% |
+| + first and last blocks and head kept (int8) | 0.702 | -6% |
+| + KL distillation from the FP teacher, kept blocks int8 (shipped) | 0.692 | -7% |
+| same, kept blocks fp16 (for reference) | 0.672 | -10% |
+
+Shipped artifact: backbone only, 41.1 MiB (ternary 22.4 MiB at 1.6 bits per weight; int8 18.1 MiB
+for kept blocks and other linears; fp16 0.4 MiB), packed codes verified against training.
+Compression gains are small (~5%): packed codes are near entropy. The VQ-VAE and root model needed
+for the demo are not yet exported or measured.
