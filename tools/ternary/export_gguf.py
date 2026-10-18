@@ -124,7 +124,8 @@ def component_metadata(component, tensors, source_path):
     """Keys the C++ loader reads, written as scripts/convert_to_gguf.py writes them."""
     import hashlib
     with open(source_path, "rb") as f:
-        source_sha = hashlib.sha256(f.read()).hexdigest()
+        # Provenance marker accepted by patches/motion-bricks/0001 (not upstream's extraction hash).
+        source_sha = "ternary:" + hashlib.sha256(f.read()).hexdigest()
     params = sum(int(np.prod(shape)) for _, _, shape, _ in tensors)
     return [
         _kv_string("general.architecture", "motionbricks"),

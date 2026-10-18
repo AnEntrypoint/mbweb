@@ -1,0 +1,38 @@
+--- a/src/model.cpp
++++ b/src/model.cpp
+@@ -77,6 +77,26 @@
+     return true;
+ }
+ 
++// Ternary bundles (tools/ternary/export_gguf.py) record "ternary:<sha256>" of the trained
++// checkpoint in motionbricks.source_sha256 instead of upstream's trusted-extraction hash.
++bool metadata_source(const gguf_context * context, const char * key,
++                     std::string_view expected, std::string & reason) {
++    const auto index = gguf_find_key(context, key);
++    if (index < 0 || gguf_get_kv_type(context, index) != GGUF_TYPE_STRING) {
++        reason = std::string("missing string metadata: ") + key;
++        return false;
++    }
++    const std::string_view actual(gguf_get_val_str(context, index));
++    if (actual == expected) {
++        return true;
++    }
++    if (actual.size() == 8 + 64 && actual.substr(0, 8) == "ternary:") {
++        return true;
++    }
++    reason = std::string("incompatible metadata value: ") + key;
++    return false;
++}
++
+ bool metadata_u32(const gguf_context * context, const char * key,
+                   std::uint32_t expected, std::string & reason) {
+     const auto index = gguf_find_key(context, key);
+@@ -161,7 +181,7 @@
+         !metadata_string(gguf.get(), "motionbricks.component", spec.name, reason) ||
+         !metadata_string(gguf.get(), "motionbricks.skeleton", "g1skel34", reason) ||
+         !metadata_string(gguf.get(), "motionbricks.upstream_revision", upstream_revision, reason) ||
+-        !metadata_string(gguf.get(), "motionbricks.source_sha256", spec.source_hash, reason) ||
++        !metadata_source(gguf.get(), "motionbricks.source_sha256", spec.source_hash, reason) ||
+         !metadata_u64(gguf.get(), "motionbricks.parameter_count", spec.parameters, reason)) {
+         reason += " (" + path.string() + ")";
+         return MB_INCOMPATIBLE_MODEL;
