@@ -24,6 +24,9 @@ mkdir -p "$SITE/component" "$SITE/model"
 cp "$ROOT/web/index.html" "$ROOT/web/style.css" "$SITE/"
 cp "$BUILD_JS"/*.wasm "$SITE/component/"
 cp "$ROOT/model/manifest.json" "$SITE/model/manifest.json"
+# Ternary pose backbone: packed trits + int8 + fp16 blob with a tensor index (qat/export_web.py).
+mkdir -p "$SITE/model/ternary"
+cp "$ROOT/model/ternary/weights.bin" "$ROOT/model/ternary/manifest.json" "$SITE/model/ternary/"
 # Pages serves files as-is; keep the empty marker so no path is filtered by Jekyll.
 touch "$SITE/.nojekyll"
 
