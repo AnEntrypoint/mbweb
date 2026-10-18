@@ -103,9 +103,41 @@ def dequant_tq1_0(data, rows, cols):
     return out
 
 
+GGUF_TYPE_UINT64 = 10
+UPSTREAM_REVISION = "a0732b642c0333077e127a2f56ab0014c196bca4"
+SKELETON = "g1skel34"
+
+
 def _kv_string(key, value):
-    raw = value.encode("utf-8")
     return _encode_str(key) + struct.pack("<I", GGUF_TYPE_STRING) + _encode_str(value)
+
+
+def _kv_u32(key, value):
+    return _encode_str(key) + struct.pack("<I", GGUF_TYPE_UINT32) + struct.pack("<I", value)
+
+
+def _kv_u64(key, value):
+    return _encode_str(key) + struct.pack("<I", GGUF_TYPE_UINT64) + struct.pack("<Q", value)
+
+
+def component_metadata(component, tensors, source_path):
+    """Keys the C++ loader reads, written as scripts/convert_to_gguf.py writes them."""
+    import hashlib
+    with open(source_path, "rb") as f:
+        source_sha = hashlib.sha256(f.read()).hexdigest()
+    params = sum(int(np.prod(shape)) for _, _, shape, _ in tensors)
+    return [
+        _kv_string("general.architecture", "motionbricks"),
+        _kv_string("general.name", f"NVIDIA MotionBricks G1 ternary {component}"),
+        _kv_u32("general.alignment", ALIGNMENT),
+        _kv_u32("general.file_type", 0),
+        _kv_u32("motionbricks.format_version", 1),
+        _kv_string("motionbricks.component", component),
+        _kv_string("motionbricks.skeleton", SKELETON),
+        _kv_string("motionbricks.upstream_revision", UPSTREAM_REVISION),
+        _kv_string("motionbricks.source_sha256", source_sha),
+        _kv_u64("motionbricks.parameter_count", params),
+    ]
 
 
 def _encode_str(s):
@@ -167,8 +199,8 @@ def tensor_nbytes(gtype, shape):
     return int(np.prod(shape)) * 2
 
 
-def write_gguf(path, tensors, general_name):
-    """tensors: list of (name, gtype, shape(rows, cols), payload bytes) in write order."""
+def write_gguf(path, tensors, metadata):
+    """tensors: list of (name, gtype, shape, payload bytes) in write order; metadata: encoded kv pairs."""
     infos = []
     offset = 0
     for name, gtype, shape, payload in tensors:
@@ -176,8 +208,9 @@ def write_gguf(path, tensors, general_name):
         infos.append((name, gtype, shape, offset))
         offset = _align(offset + len(payload))
     header = bytearray(GGUF_MAGIC + struct.pack("<I", GGUF_VERSION))
-    header += struct.pack("<QQ", len(tensors), 1)
-    header += _kv_string("general.name", general_name)
+    header += struct.pack("<QQ", len(tensors), len(metadata))
+    for kv in metadata:
+        header += kv
     for name, gtype, shape, off in infos:
         dims = tuple(reversed(shape))  # GGUF stores dims innermost first
         header += _encode_str(name)
@@ -208,7 +241,7 @@ def export(ckpt_path, out_path):
             continue
         gtype = choose_type(name, t.shape, keep_fp)
         tensors.append((name, gtype, tuple(t.shape), build_tensor_bytes(name, t, gtype)))
-    write_gguf(out_path, tensors, "NVIDIA MotionBricks G1 ternary pose")
+    write_gguf(out_path, tensors, component_metadata("pose", tensors, ckpt_path))
     return sum(len(p) for _, _, _, p in tensors)
 
 
@@ -219,3 +252,35 @@ if __name__ == "__main__":
     a = ap.parse_args()
     total = export(a.ckpt, a.out)
     print(f"wrote {total / 2**20:.1f} MiB payload to {a.out}")
+
+
+def _quant_type_for(name, shape, mode):
+    """mode 'q8': every eligible linear Q8_0, the rest F32/F16. mode 'f32': everything F32."""
+    if mode == "f32":
+        return TYPE_F32
+    if name in F32_NAMES or len(shape) != 2 or not (name.endswith(".weight") or name.endswith(".in_proj_weight")):
+        return TYPE_F32 if name in F32_NAMES or len(shape) != 2 else TYPE_F16
+    return TYPE_Q8_0 if shape[1] % 32 == 0 else TYPE_F16
+
+
+def export_lightning(ckpt_path, out_path, component):
+    """Export root or vq-decoder from an upstream Lightning checkpoint, selecting tensors as
+    scripts/convert_to_gguf.py does, with the prefix stripped."""
+    state = torch.load(ckpt_path, map_location="cpu", weights_only=False)["state_dict"]
+    if component == "root":
+        pick = {k[len("backbone_net."):]: v for k, v in state.items() if k.startswith("backbone_net.")}
+        mode = "q8"
+    elif component == "vq-decoder":
+        pick = {k[len("pose_net."):]: v for k, v in state.items()
+                if k.startswith("pose_net.decoder.") or k == "pose_net.quantizer.vq._codebook.embed"}
+        mode = "f32"
+    else:
+        raise ValueError(component)
+    tensors = []
+    for name, t in sorted(pick.items()):
+        if name == "initted":
+            continue
+        gtype = _quant_type_for(name, tuple(t.shape), mode)
+        tensors.append((name, gtype, tuple(t.shape), build_tensor_bytes(name, t, gtype)))
+    write_gguf(out_path, tensors, component_metadata(component, tensors, ckpt_path))
+    return len(tensors), sum(len(p) for _, _, _, p in tensors)
