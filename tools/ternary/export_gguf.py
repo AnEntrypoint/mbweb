@@ -256,7 +256,7 @@ def write_gguf(path, tensors, metadata):
             f.write(b"\0" * (_align(len(payload)) - len(payload)))
 
 
-def export(ckpt_path, out_path):
+def export(ckpt_path, out_path, component="pose"):
     ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     sd, keep_fp = ck["backbone"], tuple(ck["keep_fp"])
     tensors = []
@@ -270,8 +270,8 @@ def export(ckpt_path, out_path):
             tensors.append((name, gtype, tuple(t.shape), build_tensor_bytes(name, t, gtype)))
             continue
         gtype = choose_type(name, t.shape, keep_fp)
-        tensors.append((name, gtype, tuple(t.shape), build_tensor_bytes(name, t, gtype)))
-    write_gguf(out_path, tensors, component_metadata("pose", tensors, ckpt_path))
+        tensors.append((compact_name(name), gtype, tuple(t.shape), build_tensor_bytes(name, t, gtype)))
+    write_gguf(out_path, tensors, component_metadata(component, tensors, ckpt_path))
     return sum(len(p) for _, _, _, p in tensors)
 
 

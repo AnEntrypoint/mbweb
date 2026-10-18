@@ -31,6 +31,7 @@ from ternary_qat import alpha_for_step, clip_latents, convert_to_add_form, set_a
 from bench_ternary_pose import TernaryScheduleCallback  # noqa: E402
 from train_bones_pose import build, heldout_loss, MIN_CLIP_FRAMES  # noqa: E402
 from kd import wrap_model_with_kd  # noqa: E402
+from train_root_model import ROOT_KEEP_FP, build_root, load_root_config  # noqa: E402
 
 MAX_FRAMES = 600  # 20 s at 30 fps; longer clips exhaust GPU memory in the pose model
 
@@ -143,12 +144,17 @@ def main():
     parser.add_argument("--add_inference", action="store_true", help="also evaluate with addition-only ternary layers")
     parser.add_argument("--save_ckpt", default="", help="write the trained backbone state dict here")
     parser.add_argument("--kd_weight", type=float, default=0.0, help="weight of KL distillation from the FP teacher")
+    parser.add_argument("--model", choices=["pose", "root"], default="pose")
+    parser.add_argument("--root_ckpt", default="/workspace/motion-bricks/ckpt/out/motionbricks_root/version_1/checkpoints/model-step=2000000.ckpt")
     parser.add_argument("--summary", required=True)
     args = parser.parse_args()
     keep_fp = tuple(s for s in args.keep_fp.split(",") if s)
 
     pl.seed_everything(args.seed)
-    conf, _ = load_config("out", args.max_steps)
+    if args.model == "root":
+        conf, _ = load_root_config("out", args.max_steps)
+    else:
+        conf, _ = load_config("out", args.max_steps)
     motion_rep = load_motion_rep(conf)
     shard_paths = sorted(glob.glob(os.path.join(args.feats_dir, "shard_*.npz")))
     clips = LazyClips(shard_paths, motion_rep)
@@ -156,7 +162,10 @@ def main():
     print(f"shards={len(shard_paths)} usable={len(clips)} train={len(train_idx)} heldout={len(held_idx)}", flush=True)
 
     warmup = max(1, int(args.warmup_frac * args.max_steps))
-    if args.kd_weight > 0:
+    if args.model == "root":
+        keep_fp = ROOT_KEEP_FP if not os.environ.get('ROOT_FP_CONTROL') else ("",)  # "" keeps every layer FP
+        model, backbone_net, replaced = build_root(conf, motion_rep, args.root_ckpt, args.lr, warmup, keep_fp=keep_fp)
+    elif args.kd_weight > 0:
         model, backbone_net, replaced, teacher = build(conf, motion_rep, args.pose_ckpt, args.lr, warmup,
                                                        keep_fp=keep_fp, with_teacher=True)
         teacher = teacher.cuda()
@@ -210,7 +219,7 @@ def main():
         print(f"add_form={add_loss:.4f} converted={converted}", flush=True)
 
     summary = {
-        "shards": len(shard_paths), "usable_clips": len(clips), "train_clips": len(train_idx), "keep_fp": list(keep_fp), "kd_weight": args.kd_weight,
+        "shards": len(shard_paths), "usable_clips": len(clips), "train_clips": len(train_idx), "keep_fp": list(keep_fp), "kd_weight": args.kd_weight, "model": args.model,
         "heldout_clips": len(held_idx), "replaced_linear_layers": replaced, "max_steps": args.max_steps,
         "batch_size": args.batch_size, "lr": args.lr, "warmup_steps": warmup,
         "heldout_loss_fp": round(fp, 5), "heldout_loss_ptq": round(ptq, 5), "heldout_loss_qat": round(qat, 5),
