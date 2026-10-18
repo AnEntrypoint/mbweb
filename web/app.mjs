@@ -139,6 +139,9 @@ const FIGURE_RADIUS = 36; // clearance kept around obstacles, in pixels
 const LOOK_AHEAD = 70; // how far ahead the figure checks for obstacles
 const MOUSE_RADIUS = 90; // the mouse pushes the figure only when this close to its body
 const TURN_RATE = 1.8; // radians per second when turning toward a destination or away from a block
+// Walking pace across the stage, as a fraction of its smaller side per second. The generated clips carry
+// too little root travel to walk anywhere, so the pace is set here and the feet slide on the ground.
+const WALK_PACE = 0.12;
 const WANDER = 1.1; // how strongly the heading drifts while wandering
 const mouse = { x: null, y: null };
 const body = { x: null, y: null, heading: 0, turnRate: 0, last: 0, target: null };
@@ -198,9 +201,10 @@ function updateBody(now, width, height, speedPx, playing, bounds) {
         const right = insideObstacle(...ahead(body.heading + 0.7), width, height) ? 1 : 0;
         body.heading += (left <= right ? -1 : 1) * TURN_RATE * 2 * dt;
     }
-    if (!playing || speedPx <= 0) return;
-    const nx = body.x + Math.cos(body.heading) * speedPx;
-    const ny = body.y + Math.sin(body.heading) * speedPx;
+    if (!playing) return;
+    const step = WALK_PACE * Math.min(width, height) * dt;
+    const nx = body.x + Math.cos(body.heading) * step;
+    const ny = body.y + Math.sin(body.heading) * step;
     // Stay on the stage: bounce off the edges (kept clear of the figure's height) and turn around.
     // Walls keep the whole figure on the stage: the pelvis may go no closer than its extent allows.
     const { left, right, top, bottom } = bounds;
