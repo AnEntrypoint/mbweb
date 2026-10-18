@@ -152,7 +152,10 @@ def _align(n):
 
 
 # Tensors the C++ loader validates by exact type (motion-bricks.cpp src/model.cpp tensor_shape).
-F32_NAMES = {"_position_emb.embed", "_proj_pose_output_logit.weight", "_pose_token_emb.weight"}
+F32_NAMES = {
+    "_position_emb.embed", "_proj_pose_output_logit.weight", "_pose_token_emb.weight",
+    "_proj_num_token_output_logit.weight", "_conv_output.model.6.weight",
+}
 
 
 def choose_type(name, shape, keep_fp):
