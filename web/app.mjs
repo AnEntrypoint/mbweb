@@ -110,7 +110,21 @@ function prepareClip(motion) {
         speed[frame] = Math.hypot(positions[base] - positions[prev], positions[base + 2] - positions[prev + 2]);
     }
     speed[0] = speed[1] ?? 0; // the loop point has no real previous frame
-    return { frames: motion.frames, positions, minY, span, speed };
+    // How far the figure reaches above, below and to each side of the pelvis, over all frames.
+    let maxUp = 0;
+    let maxDown = 0;
+    let maxSide = 0;
+    for (let frame = 0; frame < motion.frames; frame++) {
+        const base = frame * JOINTS * 3;
+        for (let joint = 0; joint < JOINTS; joint++) {
+            const dy = positions[base + joint * 3 + 1] - positions[base + 1];
+            const dz = positions[base + joint * 3 + 2] - positions[base + 2];
+            maxUp = Math.max(maxUp, dy);
+            maxDown = Math.max(maxDown, -dy);
+            maxSide = Math.max(maxSide, Math.abs(dz));
+        }
+    }
+    return { frames: motion.frames, positions, minY, span, speed, maxUp, maxDown, maxSide };
 }
 
 const wrapUnit = (value) => ((value % 1) + 1) % 1;
@@ -154,7 +168,7 @@ function turnToward(current, goal, maxStep) {
 // Walks the figure. Distance per drawn frame is the generated clip's own pelvis travel, scaled to the
 // page; the heading wanders with inertia, heads for a clicked destination, and turns away from obstacles
 // and from the mouse when it is close to the body. The body only moves while the clip plays.
-function updateBody(now, width, height, speedPx, playing) {
+function updateBody(now, width, height, speedPx, playing, bounds) {
     const dt = body.last ? Math.min(0.1, (now - body.last) / 1000) : 0;
     body.last = now;
     if (body.x === null) {
@@ -188,12 +202,9 @@ function updateBody(now, width, height, speedPx, playing) {
     const nx = body.x + Math.cos(body.heading) * speedPx;
     const ny = body.y + Math.sin(body.heading) * speedPx;
     // Stay on the stage: bounce off the edges (kept clear of the figure's height) and turn around.
-    // The pelvis is the body's anchor: the head sits about 0.32 of the short side above it, the feet below.
-    const side = Math.min(width, height);
-    const left = side * 0.2;
-    const right = width - side * 0.2;
-    const top = side * 0.36;
-    const bottom = height - side * 0.06;
+    // Walls keep the whole figure on the stage: the pelvis may go no closer than its extent allows.
+    const { left, right, top, bottom } = bounds;
+    if (left >= right || top >= bottom) return;
     let bounced = false;
     if (nx < left || nx > right) { body.heading = Math.PI - body.heading; bounced = true; }
     if (ny < top || ny > bottom) { body.heading = -body.heading; bounced = true; }
@@ -221,7 +232,14 @@ function drawFrame(frame) {
     const speedPx = steps > 0 && steps < state.clip.frames / 2
         ? state.clip.speed[frame] * steps * (Math.min(width, height) * 0.3) / span
         : 0;
-    updateBody(performance.now(), width, height, speedPx, state.playing);
+    const pad = 6;
+    const bounds = {
+        left: state.clip.maxSide * scale + pad,
+        right: width - state.clip.maxSide * scale - pad,
+        top: state.clip.maxUp * scale + pad,
+        bottom: height - state.clip.maxDown * scale - pad,
+    };
+    updateBody(performance.now(), width, height, speedPx, state.playing, bounds);
     const cx = body.x;
     const cy = body.y;
     // Face the direction of travel: mirror the side view when walking left.
