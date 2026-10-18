@@ -145,6 +145,7 @@ const WALK_PACE = 0.12;
 const WANDER = 1.1; // how strongly the heading drifts while wandering
 const mouse = { x: null, y: null };
 const body = { x: null, y: null, heading: 0, turnRate: 0, last: 0, target: null };
+window.__figure = { body, mouse, state }; // inspectable from the browser console
 
 function resizeCanvas() {
     const ratio = window.devicePixelRatio || 1;
