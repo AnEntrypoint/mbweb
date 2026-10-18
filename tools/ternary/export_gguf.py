@@ -155,6 +155,8 @@ def _align(n):
 F32_NAMES = {
     "_position_emb.embed", "_proj_pose_output_logit.weight", "_pose_token_emb.weight",
     "_proj_num_token_output_logit.weight", "_conv_output.model.6.weight",
+    # ggml_repeat sources in the graph (src/pose.cpp, src/root.cpp): quantized types abort there.
+    "_input_position_emb.weight", "_proj_num_valid_positions.weight",
 }
 
 
