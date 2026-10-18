@@ -26,6 +26,7 @@ const state = {
     startedAt: 0,
     startFrame: 0,
     generating: false,
+    steerHeading: null,
 };
 
 function setStatus(text, stateName) {
@@ -85,6 +86,10 @@ function request(message, transfer = []) {
 // Projects the clip once: pelvis-centred side view (Z horizontal, Y up), one scale for all frames.
 function prepareClip(motion) {
     const positions = motionPositions(motion, state.parents, state.neutral);
+    {
+        const last = (motion.frames - 1) * JOINTS * 3;
+        window.__lastDisplacement = [positions[last] - positions[0], positions[last + 2] - positions[2]];
+    }
     let minY = Infinity;
     let maxY = -Infinity;
     let minZ = Infinity;
@@ -297,7 +302,7 @@ async function generate() {
         const motion = await request(
             {
                 type: 'infer',
-                globalRoot: copyOf(globalRoot),
+                globalRoot: steeredGlobalRoot(globalRoot),
                 localRoot: copyOf(localRoot),
                 pose: copyOf(pose),
                 seed: state.seed,
@@ -324,6 +329,25 @@ async function generate() {
 function copyOf(array) {
     return new Float32Array(array);
 }
+
+// Global root features per slot: x, y, z, heading cos, heading sin, normalized with the model's stats
+// (motion_rep stats: mean and std for dims 3 and 4). When a heading is set, every slot faces it.
+const HEADING_COS = { mean: 0.000262, std: 0.7076 };
+const HEADING_SIN = { mean: 0.00127, std: 0.7066 };
+function steeredGlobalRoot(globalRoot) {
+    const out = copyOf(globalRoot);
+    if (state.steerHeading === null || state.steerHeading === undefined) return out;
+    const cos = Math.cos(state.steerHeading);
+    const sin = Math.sin(state.steerHeading);
+    for (let slot = 0; slot < out.length / 5; slot++) {
+        out[slot * 5 + 3] = (cos - HEADING_COS.mean) / HEADING_COS.std;
+        out[slot * 5 + 4] = (sin - HEADING_SIN.mean) / HEADING_SIN.std;
+    }
+    return out;
+}
+// TEMPORARY test hooks for the root-direction check; removed once verified.
+window.__setHeading = (angle) => { state.steerHeading = angle; };
+window.__lastDisplacement = null;
 
 function startPlayback() {
     state.playing = true;
