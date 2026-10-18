@@ -13,6 +13,7 @@ Kept full-precision layers (keep_fp substrings) are Q8_0; other linears are TQ1_
 in_features % 256 == 0, else Q8_0 when % 32 == 0, else F16.
 """
 import argparse
+import hashlib
 import json
 import os
 import struct
@@ -200,6 +201,29 @@ def tensor_nbytes(gtype, shape):
     return int(np.prod(shape)) * 2
 
 
+def compact_name(name):
+    """Mirror scripts/convert_to_gguf.py: names under GGML_MAX_NAME (64) stay as they are."""
+    if len(name.encode("utf-8")) < 64:
+        return name
+    replacements = (
+        ("_root_token_transformer_encoder.layers.", "root.l."),
+        ("_shared_transformer_encoder.layers.", "shared.l."),
+        ("_transformer_encoder.layers.", "transformer.l."),
+        ("self_attn.", "attn."),
+        ("in_proj_weight", "qkv.weight"),
+        ("in_proj_bias", "qkv.bias"),
+        ("external_cond_blocks.", "xcond."),
+        ("target_cond_blocks.", "tcond."),
+    )
+    output = name
+    for old, new in replacements:
+        output = output.replace(old, new)
+    if len(output.encode("utf-8")) >= 64:
+        suffix = hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
+        output = output.encode("utf-8")[:48].decode("utf-8", "ignore") + "." + suffix
+    return output
+
+
 def write_gguf(path, tensors, metadata):
     """tensors: list of (name, gtype, shape, payload bytes) in write order; metadata: encoded kv pairs."""
     infos = []
@@ -282,6 +306,6 @@ def export_lightning(ckpt_path, out_path, component):
         if name == "initted":
             continue
         gtype = _quant_type_for(name, tuple(t.shape), mode)
-        tensors.append((name, gtype, tuple(t.shape), build_tensor_bytes(name, t, gtype)))
+        tensors.append((compact_name(name), gtype, tuple(t.shape), build_tensor_bytes(name, t, gtype)))
     write_gguf(out_path, tensors, component_metadata(component, tensors, ckpt_path))
     return len(tensors), sum(len(p) for _, _, _, p in tensors)

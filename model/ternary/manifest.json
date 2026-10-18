@@ -1,6 +1,6 @@
 {
   "repository": "AnEntrypoint/mbweb",
-  "revision": "ternary-pose-root-vq-2026-10-18-c",
+  "revision": "ternary-pose-root-vq-2026-10-18-d",
   "base_url": "./",
   "format": "motionbricks-ternary-ggml-v1",
   "note": "pose: TQ1_0 ternary + Q8_0 kept layers; root: Q8_0 (not yet ternary); vq-decoder: F32; support: upstream. Multi-part files are concatenated in parts order before the sha256 check.",
@@ -22,8 +22,8 @@
     },
     {
       "path": "root.gguf",
-      "bytes": 70436608,
-      "sha256": "7f0ee45f0608da53bceec342b438b149326a53a7a9a46b7e5fee8367e7b0c60a",
+      "bytes": 70436576,
+      "sha256": "9ef24a78dbe5bf30d8ec963252434fa5da1bb9f080473c76a2ae7b6f7daaf636",
       "parts": [
         "root.gguf.part-00",
         "root.gguf.part-01"
