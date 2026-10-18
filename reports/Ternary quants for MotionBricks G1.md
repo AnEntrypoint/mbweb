@@ -57,3 +57,18 @@ Shipped artifact: backbone only, 41.1 MiB (ternary 22.4 MiB at 1.6 bits per weig
 for kept blocks and other linears; fp16 0.4 MiB), packed codes verified against training.
 Compression gains are small (~5%): packed codes are near entropy. The VQ-VAE and root model needed
 for the demo are not yet exported or measured.
+
+## Root model: ternary QAT against a full-precision control (two seeds)
+
+The root model is trained without a VQ-VAE (its loss is root regression plus a token-count loss).
+The pretrained root scores 3.19 on the held-out set before fine-tuning on BONES, so the control is
+the same training run kept full precision, not the pretrained model.
+
+| Seed | Full-precision control | Ternary QAT (shipped) |
+|---|---|---|
+| 42 | 2.073 | 2.046 |
+| 43 | 2.084 | 2.035 |
+
+Ternary matches or slightly beats the full-precision control on both seeds (one run per seed,
+100 held-out clips). The 3-D convolution kernels stay F32; the other root linears are ternary
+(TQ1_0) or Q8_0 for kept first and last blocks and the output projection.
