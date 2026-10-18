@@ -239,4 +239,8 @@ window.addEventListener('resize', resizeCanvas);
 
 resizeCanvas();
 setStatus('Starting', 'loading');
-worker.postMessage({ type: 'init', manifest: await (await fetch('./model/manifest.json')).json() });
+// The worker has no document location, so the manifest's relative base is resolved here.
+const manifestUrl = new URL('./model/ternary/manifest.json', location.href);
+const manifest = await (await fetch(manifestUrl)).json();
+manifest.base_url = new URL(manifest.base_url, manifestUrl).href;
+worker.postMessage({ type: 'init', manifest });

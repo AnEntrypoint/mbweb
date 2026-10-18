@@ -73,12 +73,36 @@ async function forgetCached(cache, manifest, file) {
     }
 }
 
+// Joins a multi-part file from its parts in order, reporting progress against the whole file.
+async function fetchParts(manifest, file, onProgress) {
+    const bytes = new Uint8Array(file.bytes);
+    let offset = 0;
+    for (const part of file.parts) {
+        const response = await fetch(manifest.base_url + part);
+        if (!response.ok) {
+            throw new Error(`cannot download ${part}: HTTP ${response.status}`);
+        }
+        const data = new Uint8Array(await response.arrayBuffer());
+        if (offset + data.byteLength > bytes.byteLength) {
+            throw new Error(`${file.path} is larger than the pinned ${file.bytes} bytes`);
+        }
+        bytes.set(data, offset);
+        offset += data.byteLength;
+        onProgress(file.path, offset, file.bytes);
+    }
+    if (offset !== file.bytes) {
+        throw new Error(`${file.path} is ${offset} bytes, expected ${file.bytes}`);
+    }
+    return bytes;
+}
+
 // Returns { 'pose.gguf': Uint8Array, ... } for the files of the bundle directory.
 export async function fetchModel(manifest, onProgress = () => {}) {
     const cache = await caches.open(CACHE_PREFIX + manifest.revision);
     const files = {};
     for (const file of manifest.files) {
-        let bytes = await readCached(cache, manifest, file);
+        // Multi-part files are joined from their parts and are not kept in Cache Storage.
+        let bytes = file.parts ? null : await readCached(cache, manifest, file);
         if (bytes) {
             try {
                 bytes = await verified(file, bytes);
@@ -87,6 +111,8 @@ export async function fetchModel(manifest, onProgress = () => {}) {
                 throw error;
             }
             onProgress(file.path, file.bytes, file.bytes, 'cache');
+        } else if (file.parts) {
+            bytes = await verified(file, await fetchParts(manifest, file, onProgress));
         } else {
             const response = await fetch(manifest.base_url + file.path);
             if (!response.ok) {
