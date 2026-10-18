@@ -187,9 +187,15 @@ function updateBody(now, width, height, speedPx, playing) {
     if (!playing || speedPx <= 0) return;
     const nx = body.x + Math.cos(body.heading) * speedPx;
     const ny = body.y + Math.sin(body.heading) * speedPx;
+    // Stay on the stage: bounce off the edges (kept clear of the figure's height) and turn around.
+    const margin = Math.min(width, height) * 0.22;
+    let bounced = false;
+    if (nx < margin || nx > width - margin) { body.heading = Math.PI - body.heading; bounced = true; }
+    if (ny < margin || ny > height - margin) { body.heading = -body.heading; bounced = true; }
+    if (bounced) body.turnRate = 0;
     if (!insideObstacle(nx, ny, width, height)) {
-        body.x = ((nx % width) + width) % width;
-        body.y = ((ny % height) + height) % height;
+        body.x = Math.min(width - margin, Math.max(margin, nx));
+        body.y = Math.min(height - margin, Math.max(margin, ny));
     }
 }
 
