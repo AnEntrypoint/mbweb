@@ -330,18 +330,15 @@ function copyOf(array) {
     return new Float32Array(array);
 }
 
-// Global root features per slot: x, y, z, heading cos, heading sin, normalized with the model's stats
-// (motion_rep stats: mean and std for dims 3 and 4). When a heading is set, every slot faces it.
-const HEADING_COS = { mean: 0.000262, std: 0.7076 };
-const HEADING_SIN = { mean: 0.00127, std: 0.7066 };
+// Global root features per slot: x, y, z, heading cos, heading sin. When a heading is set, every slot faces it.
 function steeredGlobalRoot(globalRoot) {
     const out = copyOf(globalRoot);
     if (state.steerHeading === null || state.steerHeading === undefined) return out;
     const cos = Math.cos(state.steerHeading);
     const sin = Math.sin(state.steerHeading);
     for (let slot = 0; slot < out.length / 5; slot++) {
-        out[slot * 5 + 3] = (cos - HEADING_COS.mean) / HEADING_COS.std;
-        out[slot * 5 + 4] = (sin - HEADING_SIN.mean) / HEADING_SIN.std;
+        out[slot * 5 + 3] = cos; // the runtime requires a unit cosine/sine pair, not normalized values
+        out[slot * 5 + 4] = sin;
     }
     return out;
 }
