@@ -165,12 +165,12 @@ def choose_type(name, shape, keep_fp):
     if name in F32_NAMES:
         return TYPE_F32
     if any(s in name for s in keep_fp):
-        return TYPE_Q8_0 if cols % 32 == 0 else TYPE_F16
+        return TYPE_Q8_0 if cols % 32 == 0 else TYPE_F32
     if cols % QK_K == 0:
         return TYPE_TQ1_0
     if cols % 32 == 0:
         return TYPE_Q8_0
-    return TYPE_F16
+    return TYPE_F32
 
 
 def build_tensor_bytes(name, tensor, gtype):
@@ -266,7 +266,7 @@ def export(ckpt_path, out_path):
         if name.endswith(".parametrizations.in_proj_weight.original"):
             name = name[: -len(".parametrizations.in_proj_weight.original")] + ".in_proj_weight"
         if t.dim() != 2 or not (name.endswith(".weight") or name.endswith(".in_proj_weight")):
-            gtype = TYPE_F32 if name in F32_NAMES else TYPE_F16
+            gtype = TYPE_F32  # ggml_add with an F16 bias aborts; upstream keeps these F32
             tensors.append((name, gtype, tuple(t.shape), build_tensor_bytes(name, t, gtype)))
             continue
         gtype = choose_type(name, t.shape, keep_fp)
@@ -289,8 +289,8 @@ def _quant_type_for(name, shape, mode):
     if mode == "f32":
         return TYPE_F32
     if name in F32_NAMES or len(shape) != 2 or not (name.endswith(".weight") or name.endswith(".in_proj_weight")):
-        return TYPE_F32 if name in F32_NAMES or len(shape) != 2 else TYPE_F16
-    return TYPE_Q8_0 if shape[1] % 32 == 0 else TYPE_F16
+        return TYPE_F32
+    return TYPE_Q8_0 if shape[1] % 32 == 0 else TYPE_F32
 
 
 def export_lightning(ckpt_path, out_path, component):
