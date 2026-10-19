@@ -215,20 +215,23 @@ function chooseWalk() {
     if (state.goalPx !== null) {
         const goal = z + (state.goalPx - els.canvas.clientWidth * FIGURE_FRACTION) / stageScale();
         if (Math.abs(goal - z) < 0.1) state.goalPx = null;
-        else dir = Math.sign(goal - z);
+        else {
+            dir = Math.sign(goal - z);
+            state.legEnd = goal;
+        }
     }
-    const need = WALK_DISTANCE;
-    // A leg is one way for a stretch. It ends at its far point, or early at a block or limit, and the walk comes back.
-    const legDone = state.legEnd !== null && Math.abs(state.legEnd - z) < 0.3;
-    const blocked = runFrom(z, dir) < need;
-    if (state.legEnd === null || legDone || blocked) {
-        if (blocked && runFrom(z, -dir) > runFrom(z, dir)) dir = -dir;
-        else if (legDone) dir = -dir;
+    // A leg has one end. The direction changes only when the leg ends (at its far point, a block or a limit), so the
+    // plan does not flip from one request to the next. The end is set once per leg and planning only reads it.
+    const reached = state.legEnd !== null && (dir > 0 ? z >= state.legEnd - 0.05 : z <= state.legEnd + 0.05);
+    if (state.legEnd === null || reached) {
+        if (state.legEnd !== null && state.goalPx === null) dir = -dir;
+        if (runFrom(z, dir) < 0.2 && runFrom(z, -dir) > runFrom(z, dir)) dir = -dir;
         state.legEnd = z + dir * Math.min(LEG_METRES, runFrom(z, dir));
     }
     state.walkDir = dir;
-    // nearStop: a block or limit is within one stride, so only then does the planner get a world target to stop at.
-    return { direction: dir, distance: Math.max(0.2, Math.min(need, Math.abs(state.legEnd - z))), nearStop: Math.abs(state.legEnd - z) < need };
+    const remaining = Math.abs(state.legEnd - z);
+    // nearStop: the leg's end is within one stride, so the planner gets it as a world target to stop at.
+    return { direction: dir, distance: Math.max(0.2, Math.min(WALK_DISTANCE, remaining)), nearStop: remaining < WALK_DISTANCE };
 }
 
 // Pelvis-relative side-view offsets for one frame, as [depth, height] pairs in model units.
