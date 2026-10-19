@@ -127,3 +127,19 @@ export function sourceFeatures(values, frames, parents, neutral) {
 
     return { globalRoot, localRoot, pose, origin, yaw };
 }
+
+// Steers the next clip with a destination, as the upstream controller does: the four target slots move the root
+// to a point `distance` metres ahead of the source's last frame, turned by `turn` radians, and the model walks there.
+// The target pose stays the source's last pose, so the figure keeps its stride.
+export function aimTargets(source, { distance, turn }) {
+    const g = source.globalRoot;
+    const last = (SOURCE_FRAMES - 1) * 5;
+    const heading = Math.atan2(g[last + 4], g[last + 3]) + turn;
+    const x = g[last] + distance * Math.sin(heading);
+    const z = g[last + 2] + distance * Math.cos(heading);
+    for (let slot = SOURCE_FRAMES; slot < 8; slot++) {
+        const at = slot * 5;
+        g.set([x, g[last + 1], z, Math.cos(heading), Math.sin(heading)], at);
+    }
+    return source;
+}

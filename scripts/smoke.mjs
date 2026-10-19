@@ -119,7 +119,8 @@ try {
     for (const message of consoleErrors) console.log(`     console: ${message}`);
 
     // PRD-04: a checksum mismatch aborts loading with a visible error.
-    const tampered = await browser.newContext();
+    // Service workers are blocked here: their fetches bypass the route below, and the checksum check is shared by both load paths.
+    const tampered = await browser.newContext({ serviceWorkers: 'block' });
     const tamperedPage = await tampered.newPage();
     await tampered.route('**/support.gguf', async (route) => {
         const response = await route.fetch();

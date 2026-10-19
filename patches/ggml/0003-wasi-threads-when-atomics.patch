@@ -1,0 +1,15 @@
+diff --git a/src/ggml-cpu/ggml-cpu.c b/src/ggml-cpu/ggml-cpu.c
+index 87ac0a70..651e7543 100644
+--- a/src/ggml-cpu/ggml-cpu.c
++++ b/src/ggml-cpu/ggml-cpu.c
+@@ -2795,8 +2795,8 @@ struct ggml_cplan ggml_graph_plan(
+     n_threads = 1;
+ #endif
+ 
+-#if defined(__wasi__)
+-    // WASI doesn't support parallelism yet
++#if defined(__wasi__) && !defined(__wasm_atomics__)
++    // WASI without threads (no shared memory) cannot run the worker pool, so it stays on one thread.
+     n_threads = 1;
+ #endif
+ 

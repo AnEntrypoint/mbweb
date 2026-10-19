@@ -62,6 +62,9 @@ jobs:
       - name: Install Chromium for the smoke test
         run: npx --yes playwright@1.55.1 install --with-deps chromium
 
+      - name: Build the threaded core (wasm32-wasip1-threads)
+        run: scripts/build-threads.sh
+
       - name: Assemble the site
         run: scripts/build-site.sh
 

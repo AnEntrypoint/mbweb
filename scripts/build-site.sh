@@ -16,12 +16,18 @@ mkdir -p "$SITE/component" "$SITE/model"
 
 # jco's default core-module loader has a Node-only branch (node:fs/promises). The page always
 # supplies its own loader, so that branch never runs in the browser and stays external.
-(cd "$ROOT" && npx --no-install esbuild web/app.mjs web/worker.mjs \
+(cd "$ROOT" && npx --no-install esbuild web/app.mjs web/worker.mjs web/threads-worker.mjs \
     --bundle --format=esm --platform=browser --target=es2022 --minify \
     --external:node:fs/promises \
     --outdir="$SITE" --entry-names=[name])
 
 cp "$ROOT/web/index.html" "$ROOT/web/style.css" "$SITE/"
+cp "$ROOT/web/coi-sw.js" "$SITE/"
+# The threaded core is a plain wasm module the inference worker loads directly (scripts/build-threads.sh).
+THREADED="$ROOT/build/threads/motionbricks-threads.wasm"
+[ -f "$THREADED" ] || { echo "build-site: run scripts/build-threads.sh first" >&2; exit 1; }
+mkdir -p "$SITE/threads"
+cp "$THREADED" "$SITE/threads/"
 cp "$BUILD_JS"/*.wasm "$SITE/component/"
 cp "$ROOT/model/manifest.json" "$SITE/model/manifest.json"
 # Ternary-ready GGML bundle: pose (TQ1_0), root (Q8_0 parts), vq-decoder and support (tools/ternary/export_gguf.py).

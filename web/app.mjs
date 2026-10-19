@@ -1,6 +1,6 @@
 // Page logic: starts the worker, draws the generated clip as a stick figure, and wires the controls.
 import { motionPositions, JOINTS, FRAME_VALUES } from './lib/skeleton.mjs';
-import { SOURCE_FRAMES, placeFrames, sourceFeatures } from './lib/continuity.mjs';
+import { SOURCE_FRAMES, aimTargets, placeFrames, sourceFeatures } from './lib/continuity.mjs';
 
 const FPS = 30;
 const els = {
@@ -12,6 +12,23 @@ const els = {
     canvas: document.getElementById('stage'),
 };
 const ctx = els.canvas.getContext('2d');
+
+// Threads need a cross-origin isolated page. A static host cannot send the headers, so a service worker adds them;
+// the first load registers it and reloads once. If that fails, the page still runs on the single-thread core.
+if (!self.crossOriginIsolated && 'serviceWorker' in navigator && !sessionStorage.getItem('coi-reloaded')) {
+    sessionStorage.setItem('coi-reloaded', '1');
+    try {
+        const registration = await navigator.serviceWorker.register('./coi-sw.js');
+        // "ready" never settles if registration is blocked, so the wait is bounded and the page carries on without it.
+        const active = await Promise.race([
+            navigator.serviceWorker.ready.then(() => true),
+            new Promise((resolve) => setTimeout(() => resolve(false), 5000)),
+        ]);
+        if (active && registration.active) location.reload();
+    } catch (error) {
+        console.warn('Cross-origin isolation unavailable; using the single-thread core', error);
+    }
+}
 
 const state = {
     parents: null,
@@ -323,7 +340,9 @@ function drawFrame(frame) {
 
 // Clips are generated ahead of playback: each new clip chains from the last generated one, not the one on screen,
 // so the queue can run PREFETCH clips deep and the figure never stops at a boundary waiting for the model.
-const PREFETCH = 2;
+const WALK_DISTANCE = 1.5; // metres each clip walks ahead
+const WANDER_TURN = 0.8; // radians of random turn available per clip
+const PREFETCH = 1; // one clip ahead: the next clip generates while the current one plays
 
 function fillQueue() {
     if (!state.standing || state.generating || state.queue.length >= PREFETCH) return;
@@ -346,13 +365,15 @@ async function produce() {
                 origin: { x: 0, z: 0 },
                 yaw: 0,
             };
+        // Each clip walks to a point ahead of the last one, with a small random turn, so the figure keeps moving.
+        aimTargets(source, { distance: WALK_DISTANCE, turn: (Math.random() - 0.5) * WANDER_TURN });
         const motion = await request({
             type: 'infer',
             globalRoot: source.globalRoot,
             localRoot: source.localRoot,
             pose: source.pose,
             seed: state.seed,
-            freeTarget: true,
+            freeTarget: false,
         });
         state.seed += 1;
         // The model's clip starts with the source frames, which repeat the previous clip's last frames: play it after them.
