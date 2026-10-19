@@ -88,3 +88,10 @@ Headless runs of the real component (`scripts/diagnose-chain.mjs`) found two cau
 - **The render floated the feet.** Each pose was drawn from the pelvis, so the lowest joint moved relative to the shadow line from frame to frame. `drawFrame` now pins each frame's lowest joint to the ground line.
 
 Measured after both fixes: a chained clip reproduces its source to 1.1 cm at the root and in joint positions (before the lift it was 8 cm), 1.9° of heading, and 1.7 mm of root height.
+
+## GPU feasibility (measured, not implemented)
+
+- The pinned `ggml-webgpu` backend is 4763 lines against Dawn's C++ WebGPU wrapper. Its browser path is the Emscripten build (`#ifdef __EMSCRIPTEN__`), not the WASI build the threaded core uses, so it cannot be dropped into the current toolchain as is.
+- Its shader set has no ternary (TQ1_0) matrix-multiply shader. The ternary matmuls dominate the largest graph, so a GPU backend without one would run them on the CPU.
+- This machine's Chromium exposes `navigator.gpu`, but `requestAdapter()` returns null (no usable GPU), so a GPU path cannot be executed or measured here.
+- Remaining work, in order: pick the toolchain (emscripten build of the core, or a `webgpu.h` shim under WASI); write a WGSL ternary matmul kernel and check it against the CPU path; run on a machine with a WebGPU adapter and measure the largest graph.
