@@ -22,6 +22,12 @@ function turnXZ(a, x, z) {
     return [x * c + z * s, -x * s + z * c];
 }
 
+// Heading of a frame's root, in the frame the clip is stored in.
+export function headingAt(values, frame) {
+    const base = frame * FRAME_VALUES;
+    return headingOf(values.subarray(base + 3, base + 7));
+}
+
 // Heading of a root orientation: the yaw about +Y that carries +Z forward to the root's forward axis.
 function headingOf(q) {
     const forward = rotate(q, [0, 0, 1]);

@@ -1,6 +1,6 @@
 // Page logic: starts the worker, draws the generated clip as a stick figure, and wires the controls.
 import { motionPositions, JOINTS, FRAME_VALUES } from './lib/skeleton.mjs';
-import { SOURCE_FRAMES, aimTargets, placeFrames, sourceFeatures } from './lib/continuity.mjs';
+import { SOURCE_FRAMES, aimTargets, headingAt, placeFrames, sourceFeatures } from './lib/continuity.mjs';
 
 const FPS = 30;
 const els = {
@@ -149,23 +149,18 @@ function prepareClip(motion) {
     return { frames: motion.frames, values: motion.values, positions, minY, span, speed, maxUp, maxDown, maxSide };
 }
 
-const wrapUnit = (value) => ((value % 1) + 1) % 1;
+const wrapAngle = (angle) => Math.atan2(Math.sin(angle), Math.cos(angle));
 
-// Obstacles as page fractions: top-left corner and size.
-const OBSTACLES = [
-    { x: 0.20, y: 0.52, w: 0.08, h: 0.14 },
-    { x: 0.55, y: 0.66, w: 0.10, h: 0.12 },
-    { x: 0.78, y: 0.30, w: 0.07, h: 0.22 },
+// The stage is a floor with blocks standing on it. The figure walks left or right along the floor, turns around
+// at a block or an edge, and walks toward a clicked point when there is one.
+const FLOOR_FRACTION = 0.8; // floor height as a share of the stage height
+const OBSTACLES = [ // on the floor: left edge, width, and height as shares of the stage
+    { x: 0.22, w: 0.08, h: 0.14 },
+    { x: 0.52, w: 0.10, h: 0.10 },
+    { x: 0.76, w: 0.07, h: 0.18 },
 ];
-const FIGURE_RADIUS = 36; // clearance kept around obstacles, in pixels
-const LOOK_AHEAD = 70; // how far ahead the figure checks for obstacles
-const MOUSE_RADIUS = 90; // the mouse pushes the figure only when this close to its body
-const TURN_RATE = 1.8; // radians per second when turning toward a destination or away from a block
-const WANDER = 1.1; // how strongly the heading drifts while wandering
 const BLEND_FRAMES = 8; // frames over which a new clip eases in from the outgoing pose
-const FACE_BAND = 0.25; // the figure turns around only once the heading is this far past vertical
-const mouse = { x: null, y: null };
-const body = { x: null, y: null, heading: 0, turnRate: 0, last: 0, target: null, facing: 1 };
+const body = { x: null, dir: 1, target: null };
 
 function resizeCanvas() {
     const ratio = window.devicePixelRatio || 1;
@@ -177,67 +172,42 @@ function resizeCanvas() {
     drawFrame(state.frame);
 }
 
-function insideObstacle(x, y, width, height) {
-    return OBSTACLES.some((o) => (
-        x > o.x * width - FIGURE_RADIUS && x < (o.x + o.w) * width + FIGURE_RADIUS &&
-        y > o.y * height - FIGURE_RADIUS && y < (o.y + o.h) * height + FIGURE_RADIUS
-    ));
+// True when a figure centred at x (half-width hw) overlaps any block on the floor.
+function obstacleAt(x, hw, width) {
+    return OBSTACLES.some((o) => x + hw > o.x * width && x - hw < (o.x + o.w) * width);
 }
 
-function turnToward(current, goal, maxStep) {
-    const difference = Math.atan2(Math.sin(goal - current), Math.cos(goal - current));
-    return current + Math.max(-maxStep, Math.min(maxStep, difference));
+// Pixels per metre of the session's figure: one scale for the whole session.
+function stageScale() {
+    if (state.span === null) return 1;
+    return (Math.min(els.canvas.clientWidth, els.canvas.clientHeight) * 0.3) / state.span;
 }
 
-// Walks the figure. Distance per drawn frame is the generated clip's own pelvis travel, scaled to the
-// page; the heading wanders with inertia, heads for a clicked destination, and turns away from obstacles
-// and from the mouse when it is close to the body. The body only moves while the clip plays.
-function updateBody(now, width, height, speedPx, playing, bounds) {
-    const dt = body.last ? Math.min(0.1, (now - body.last) / 1000) : 0;
-    body.last = now;
-    if (body.x === null) {
-        body.x = width / 2;
-        body.y = height / 2;
-        body.heading = Math.random() * Math.PI * 2;
-    }
-    if (body.target) {
-        const toTarget = Math.atan2(body.target.y - body.y, body.target.x - body.x);
-        body.heading = turnToward(body.heading, toTarget, TURN_RATE * dt);
-        body.turnRate = 0;
-        if (Math.hypot(body.target.x - body.x, body.target.y - body.y) < 24) body.target = null;
-    } else {
-        body.turnRate += (Math.random() - 0.5) * WANDER * dt;
-        body.turnRate *= Math.exp(-1.2 * dt);
-        body.heading += body.turnRate * dt;
-    }
-    // The mouse turns the figure away only when the pointer is close to its body.
-    if (mouse.x !== null && Math.hypot(mouse.x - body.x, mouse.y - body.y) < MOUSE_RADIUS) {
-        const away = Math.atan2(body.y - mouse.y, body.x - mouse.x);
-        body.heading = turnToward(body.heading, away, TURN_RATE * dt);
-    }
-    // Obstacles ahead: turn toward whichever side is clear, and do not walk into them.
-    const ahead = (angle) => [body.x + Math.cos(angle) * LOOK_AHEAD, body.y + Math.sin(angle) * LOOK_AHEAD];
-    if (insideObstacle(...ahead(body.heading), width, height)) {
-        const left = insideObstacle(...ahead(body.heading - 0.7), width, height) ? 1 : 0;
-        const right = insideObstacle(...ahead(body.heading + 0.7), width, height) ? 1 : 0;
-        body.heading += (left <= right ? -1 : 1) * TURN_RATE * 2 * dt;
-    }
+// Walks the figure along the floor. The step is the clip's own pelvis travel since the last drawn frame, so the body
+// moves with the model's motion. Reaching a clicked point clears it; a block or an edge stops the body in place until
+// the next clip turns it, which is decided before the clip is generated.
+function updateBody(step, playing, bounds, width) {
+    if (body.target !== null && Math.abs(body.target - body.x) < 8) body.target = null;
     if (!playing) return;
-    const step = speedPx; // the clip's own pelvis travel since the last drawn frame
-    const nx = body.x + Math.cos(body.heading) * step;
-    const ny = body.y + Math.sin(body.heading) * step;
-    // Stay on the stage: bounce off the edges (kept clear of the figure's height) and turn around.
-    // Walls keep the whole figure on the stage: the pelvis may go no closer than its extent allows.
-    const { left, right, top, bottom } = bounds;
-    if (left >= right || top >= bottom) return;
-    let bounced = false;
-    if (nx < left || nx > right) { body.heading = Math.PI - body.heading; bounced = true; }
-    if (ny < top || ny > bottom) { body.heading = -body.heading; bounced = true; }
-    if (bounced) body.turnRate = 0;
-    if (!insideObstacle(nx, ny, width, height)) {
-        body.x = Math.min(right, Math.max(left, nx));
-        body.y = Math.min(bottom, Math.max(top, ny));
+    const next = body.x + body.dir * step;
+    if (next - bounds.half < bounds.left || next + bounds.half > bounds.right || obstacleAt(next, bounds.half, width)) {
+        return;
     }
+    body.x = next;
+}
+
+// The direction of the next clip: towards a clicked point if there is one, otherwise the current direction. A
+// direction that would walk into a block or off the stage is reversed before the clip is generated.
+function chooseDirection() {
+    if (body.x === null) return body.dir;
+    const width = els.canvas.clientWidth;
+    const scale = stageScale();
+    const half = state.extent.maxSide * scale + 6;
+    const dir = body.target !== null ? Math.sign(body.target - body.x) || body.dir : body.dir;
+    const ahead = body.x + dir * WALK_DISTANCE * scale;
+    const blocked = ahead - half < 6 || ahead + half > width - 6 || obstacleAt(ahead, half, width);
+    body.dir = blocked ? -dir : dir;
+    return body.dir;
 }
 
 // Pelvis-relative side-view offsets for one frame, as [depth, height] pairs in model units.
@@ -267,21 +237,15 @@ function drawFrame(frame) {
     const speedPx = steps > 0 && steps < state.clip.frames / 2
         ? state.clip.speed[frame] * steps * (Math.min(width, height) * 0.3) / span
         : 0;
-    const pad = 6;
-    const bounds = {
-        left: extent.maxSide * scale + pad,
-        right: width - extent.maxSide * scale - pad,
-        top: extent.maxUp * scale + pad,
-        bottom: height - extent.maxDown * scale - pad,
-    };
-    updateBody(performance.now(), width, height, speedPx, state.playing, bounds);
+    const floorY = height * FLOOR_FRACTION;
+    const half = extent.maxSide * scale + 6;
+    if (body.x === null) body.x = width * 0.15;
+    updateBody(speedPx, state.playing, { left: 6, right: width - 6, half }, width);
+    // The feet stand on the floor: the pelvis sits as far above it as the figure's deepest joint reaches.
     const cx = body.x;
-    const cy = body.y;
-    // Face the direction of travel: mirror the side view when walking left. The flip waits until the heading is
-    // clearly past vertical, so a heading that hovers near it does not flicker the figure.
-    if (body.facing === 1 && Math.cos(body.heading) < -FACE_BAND) body.facing = -1;
-    else if (body.facing === -1 && Math.cos(body.heading) > FACE_BAND) body.facing = 1;
-    const facing = body.facing;
+    const cy = floorY - extent.maxDown * scale;
+    // The side view always faces the way the model walks: the model is aimed along the floor.
+    const facing = 1;
     const offsets = pelvisOffsets(state.clip, frame);
     if (state.blend) {
         // Ease the pose from the outgoing clip's last frame into this clip over its first frames.
@@ -291,14 +255,14 @@ function drawFrame(frame) {
         if (frame >= BLEND_FRAMES) state.blend = null;
     }
 
-    ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--ground').trim() || '#b9b3a6';
-    for (const obstacle of OBSTACLES) {
-        ctx.fillRect(obstacle.x * width, obstacle.y * height, obstacle.w * width, obstacle.h * height);
+    const ground = getComputedStyle(document.body).getPropertyValue('--ground').trim() || '#b9b3a6';
+    ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--ink').trim() || '#1d1b18';
+    ctx.fillRect(0, floorY, width, 2);
+    ctx.fillStyle = ground;
+    for (const block of OBSTACLES) {
+        ctx.fillRect(block.x * width, floorY - block.h * height, block.w * width, block.h * height);
     }
-    // A shadow under the feet keeps the figure reading as standing on the stage while it walks.
-    ctx.beginPath();
-    ctx.ellipse(cx, cy + extent.maxDown * scale, extent.maxSide * scale * 0.8 + 4, 3, 0, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--ink').trim() || '#1d1b18';
 
     ctx.strokeStyle = getComputedStyle(document.body).getPropertyValue('--ink').trim() || '#1d1b18';
     ctx.fillStyle = ctx.strokeStyle;
@@ -341,7 +305,6 @@ function drawFrame(frame) {
 // Clips are generated ahead of playback: each new clip chains from the last generated one, not the one on screen,
 // so the queue can run PREFETCH clips deep and the figure never stops at a boundary waiting for the model.
 const WALK_DISTANCE = 1.5; // metres each clip walks ahead
-const WANDER_TURN = 0.8; // radians of random turn available per clip
 const PREFETCH = 1; // one clip ahead: the next clip generates while the current one plays
 
 function fillQueue() {
@@ -366,7 +329,10 @@ async function produce() {
                 yaw: 0,
             };
         // Each clip walks to a point ahead of the last one, with a small random turn, so the figure keeps moving.
-        aimTargets(source, { distance: WALK_DISTANCE, turn: (Math.random() - 0.5) * WANDER_TURN });
+        // Aim the clip along the floor: the model walks toward the target, so its heading turns to the chosen direction.
+        const direction = chooseDirection();
+        const heading = previous ? headingAt(previous.values, previous.frames - 1) : 0;
+        aimTargets(source, { distance: WALK_DISTANCE, turn: wrapAngle((direction > 0 ? 0 : Math.PI) - heading) });
         const motion = await request({
             type: 'infer',
             globalRoot: source.globalRoot,
@@ -468,18 +434,9 @@ function tick(now) {
     requestAnimationFrame(tick);
 }
 
-els.canvas.addEventListener('pointermove', (event) => {
-    const rect = els.canvas.getBoundingClientRect();
-    mouse.x = event.clientX - rect.left;
-    mouse.y = event.clientY - rect.top;
-});
-els.canvas.addEventListener('pointerleave', () => {
-    mouse.x = null;
-    mouse.y = null;
-});
 els.canvas.addEventListener('pointerdown', (event) => {
     const rect = els.canvas.getBoundingClientRect();
-    body.target = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    body.target = event.clientX - rect.left;
 });
 els.play.addEventListener('click', () => {
     if (!state.clip) return;
