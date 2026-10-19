@@ -58,10 +58,12 @@ const standingReport = (motion) => {
 const standing = await infer({ globalRoot, localRoot, pose }, 1);
 console.log('== standing clip (free target)');
 console.log(`frames ${standing.frames}`);
+console.log(`profile: ${await inference.profile()}`);
 console.table(standingReport(standing));
 
 const source = sourceFeatures(standing.values, standing.frames, parents, neutral);
 const chained = await infer(source, 2);
+console.log(`profile: ${await inference.profile()}`);
 console.log('== chained clip: model against its source frames (canonical frame)');
 const pos = new Float32Array(JOINTS * 3);
 const rot = new Float32Array(JOINTS * 4);

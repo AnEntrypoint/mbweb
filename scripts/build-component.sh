@@ -69,12 +69,13 @@ wit-bindgen c "$ROOT/wit" --world motionbricks --out-dir "$ROOT/component/gen" >
 
 CLANG="$SDK/bin/clang"
 CFLAGS=(--target=wasm32-wasip3 -O2 -msimd128 -DNDEBUG -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_CLOCKS
-        -I"$SRC/include" -I"$ROOT/component" -Wall -Wextra -Wno-unused-parameter)
+        -I"$SRC/include" -I"$SRC/ggml/include" -I"$ROOT/component" -Wall -Wextra -Wno-unused-parameter)
 "$CLANG" "${CFLAGS[@]}" -c "$ROOT/component/motionbricks.c" -o "$COMP/glue.o"
 "$CLANG" "${CFLAGS[@]}" -c "$ROOT/component/gen/motionbricks.c" -o "$COMP/bindings.o"
 "$CLANG" "${CFLAGS[@]}" -c "$ROOT/component/dl-stubs.c" -o "$COMP/dl-stubs.o"
 
 "$SDK/bin/clang++" --target=wasm32-wasip3 -O2 -fno-exceptions -mexec-model=reactor \
+    -Wl,--wrap=ggml_backend_graph_compute \
     "$COMP/glue.o" "$COMP/bindings.o" "$COMP/dl-stubs.o" "$ROOT/component/gen/motionbricks_component_type.o" \
     "$CORE/libmotionbricks.a" "$CORE/ggml/src/libggml.a" "$CORE/ggml/src/libggml-cpu.a" "$CORE/ggml/src/libggml-base.a" \
     -lwasi-emulated-signal -lwasi-emulated-process-clocks \

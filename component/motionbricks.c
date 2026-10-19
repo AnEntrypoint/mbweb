@@ -8,6 +8,9 @@
 #include <motionbricks/inference.h>
 #include <motionbricks/motionbricks.h>
 
+#include "ggml-backend.h"
+#include <time.h>
+
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,6 +23,36 @@
 #define FRAME_VALUES (3U + JOINTS * 4U) /* root xyz + local XYZW per joint */
 
 static mb_model * g_model = NULL;
+
+/* Per-graph profile. The core runs every ggml graph through ggml_backend_graph_compute; the link wraps that
+ * symbol (-Wl,--wrap) so each graph's wall time is recorded here, without touching the core sources. */
+#define PROFILE_GRAPHS 32U
+typedef struct {
+    uint32_t nodes;
+    double ms;
+} graph_sample;
+static graph_sample g_graphs[PROFILE_GRAPHS];
+static uint32_t g_graph_count = 0;
+static double g_infer_ms = 0.0;
+
+static double now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1e3 + (double)ts.tv_nsec / 1e6;
+}
+
+enum ggml_status __real_ggml_backend_graph_compute(ggml_backend_t backend, struct ggml_cgraph * graph);
+
+enum ggml_status __wrap_ggml_backend_graph_compute(ggml_backend_t backend, struct ggml_cgraph * graph) {
+    const double start = now_ms();
+    const enum ggml_status status = __real_ggml_backend_graph_compute(backend, graph);
+    if (g_graph_count < PROFILE_GRAPHS) {
+        g_graphs[g_graph_count].nodes = (uint32_t)ggml_graph_n_nodes(graph);
+        g_graphs[g_graph_count].ms = now_ms() - start;
+        g_graph_count++;
+    }
+    return status;
+}
 
 static void set_error(motionbricks_string_t * err, const char * message) {
     motionbricks_string_dup(err, message);
@@ -302,7 +335,10 @@ bool exports_mb_motionbricks_inference_infer(motionbricks_list_f32_t * global_ro
     }
 
     mb_motion * motion = NULL;
+    g_graph_count = 0;
+    const double infer_start = now_ms();
     status = mb_model_infer(g_model, request, &motion, error, sizeof error);
+    g_infer_ms = now_ms() - infer_start;
     mb_inference_request_free(request);
     if (status != MB_OK) {
         set_status_error(err, "mb_model_infer", error, status);
@@ -342,4 +378,20 @@ bool exports_mb_motionbricks_inference_infer(motionbricks_list_f32_t * global_ro
     ret->frames = (uint32_t)frames;
     ret->values = (motionbricks_list_f32_t){values, (size_t)frames * FRAME_VALUES};
     return true;
+}
+
+void exports_mb_motionbricks_inference_profile(motionbricks_string_t * ret) {
+    double graph_total = 0.0;
+    for (uint32_t i = 0; i < g_graph_count; ++i) graph_total += g_graphs[i].ms;
+    /* Host time is what the graphs did not account for: planning, sampling and tensor copies. */
+    char text[1024];
+    int at = snprintf(text, sizeof text, "infer %.1f ms; graphs %.1f ms; host %.1f ms; %u graphs:",
+                      g_infer_ms, graph_total, g_infer_ms - graph_total, (unsigned)g_graph_count);
+    for (uint32_t i = 0; i < g_graph_count && at > 0 && (size_t)at < sizeof text; ++i) {
+        const int wrote = snprintf(text + at, sizeof text - (size_t)at, " [%u nodes %.1f ms]",
+                                   (unsigned)g_graphs[i].nodes, g_graphs[i].ms);
+        if (wrote < 0) break;
+        at += wrote;
+    }
+    motionbricks_string_dup(ret, text);
 }

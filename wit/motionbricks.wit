@@ -46,6 +46,9 @@ interface inference {
         seed: u64,
         free-target: bool,
     ) -> result<motion, string>;
+
+    /// Timing of the last infer call: total, host time, and each ggml graph's node count and milliseconds.
+    profile: func() -> string;
 }
 
 world motionbricks {
