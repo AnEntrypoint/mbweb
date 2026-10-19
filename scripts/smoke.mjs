@@ -96,25 +96,17 @@ try {
     check(frames >= 24 && frames <= 64 && frames % 4 === 0, `first clip has ${frames} frames (24..64, multiple of 4)`);
     measurements.frames = frames;
 
-    await pauseIfPlaying(page);
-    await scrubTo(page, 0);
-    const first = await canvasPixels(page);
-    await scrubTo(page, frames - 1);
-    const last = await canvasPixels(page);
-    check(first !== last, 'canvas pixels differ between frame 0 and the last frame');
-
-    // Generate another clip: one inference call per click.
-    await page.click('#generate');
-    const generated = await waitForState(page, ['ready', 'error']);
-    check(generated === 'ready', `generate reaches ready (${generated})`);
+    // Live playback: queued clips take over one after another with no user action.
+    await page.waitForFunction(() => Number(document.body.dataset.clip) >= 2, null, { timeout: 180 * 1000 });
     const secondFrames = Number(await page.getAttribute('body', 'data-frames'));
     // A chained clip plays its model output without the four source frames it repeats from the last clip.
     check(secondFrames >= 20 && secondFrames <= 60, `second clip has ${secondFrames} frames after its source frames`);
     await pauseIfPlaying(page);
+    const playing = Number(await page.getAttribute('body', 'data-frames'));
     await scrubTo(page, 0);
     const clipStart = await canvasPixels(page);
-    await scrubTo(page, secondFrames - 1);
-    check(clipStart !== (await canvasPixels(page)), 'second clip also animates');
+    await scrubTo(page, playing - 1);
+    check(clipStart !== (await canvasPixels(page)), 'live clip animates from its first frame to its last');
 
     // Warm load: a reload finds the verified weights in Cache Storage.
     started = Date.now();

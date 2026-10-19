@@ -6,7 +6,6 @@ const FPS = 30;
 const els = {
     status: document.getElementById('status'),
     progress: document.getElementById('progress'),
-    generate: document.getElementById('generate'),
     play: document.getElementById('play'),
     scrub: document.getElementById('scrub'),
     frameLabel: document.getElementById('frame-label'),
@@ -29,6 +28,7 @@ const state = {
     generating: false,
     tail: null, // last generated clip: the source for the next one
     queue: [], // generated clips waiting to play
+    clipCount: 0, // clips started so far; mirrored to body[data-clip] for the smoke test
     span: null, // one scale for the whole session, set from the first clip
     extent: { maxUp: 0, maxDown: 0, maxSide: 0 }, // largest reach over all clips so far
     blend: null, // the outgoing clip's pelvis-relative pose, eased into the next clip
@@ -42,7 +42,6 @@ function setStatus(text, stateName) {
 
 function fail(message) {
     setStatus(message, 'error');
-    els.generate.disabled = true;
     els.play.disabled = true;
     els.scrub.disabled = true;
 }
@@ -62,7 +61,6 @@ worker.onmessage = ({ data }) => {
         state.neutral = data.neutral;
         state.standing = data.standing;
         els.progress.hidden = true;
-        els.generate.disabled = false;
         fillQueue();
     } else if (data.type === 'motion') {
         const pending = state.pending.get(data.id);
@@ -335,7 +333,6 @@ function fillQueue() {
 async function produce() {
     if (!state.standing || state.generating) return;
     state.generating = true;
-    els.generate.disabled = true;
     setStatus('Generating a motion clip', 'generating');
     try {
         // The source is the last generated clip's last frames, placed where that clip ended; the first clip starts from standing.
@@ -370,7 +367,6 @@ async function produce() {
         };
         state.tail = clip;
         state.queue.push(clip);
-        els.generate.disabled = false;
         if (!state.clip) {
             advanceClip();
             drawFrame(0);
@@ -392,6 +388,8 @@ function advanceClip() {
     state.blend = state.clip ? pelvisOffsets(state.clip, state.clip.frames - 1) : null;
     state.clip = next;
     state.frame = 0;
+    state.clipCount += 1;
+    document.body.dataset.clip = String(state.clipCount);
     els.scrub.max = String(next.frames - 1);
     els.scrub.disabled = false;
     els.play.disabled = false;
@@ -449,7 +447,6 @@ function tick(now) {
     requestAnimationFrame(tick);
 }
 
-els.generate.addEventListener('click', () => fillQueue());
 els.canvas.addEventListener('pointermove', (event) => {
     const rect = els.canvas.getBoundingClientRect();
     mouse.x = event.clientX - rect.left;
