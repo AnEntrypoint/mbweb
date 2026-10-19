@@ -219,7 +219,8 @@ function chooseWalk() {
         state.legEnd = z + dir * Math.min(LEG_METRES, runFrom(z, dir));
     }
     state.walkDir = dir;
-    return { direction: dir, distance: Math.max(0.2, Math.min(need, Math.abs(state.legEnd - z))) };
+    // nearStop: a block or limit is within one stride, so only then does the planner get a world target to stop at.
+    return { direction: dir, distance: Math.max(0.2, Math.min(need, Math.abs(state.legEnd - z))), nearStop: Math.abs(state.legEnd - z) < need };
 }
 
 // Pelvis-relative side-view offsets for one frame, as [depth, height] pairs in model units.
@@ -350,11 +351,13 @@ async function produce() {
                 style: 'walk',
                 direction: walk.direction,
                 speed: -1,
-                target: state.legEnd === null ? null : { z: state.legEnd },
+                target: walk.nearStop ? { z: state.legEnd } : null,
                 seed: state.seed,
             });
             state.seed += 1;
-            enqueue(prepareClip({ frames: motion.frames, values: motion.values }));
+            // The agent's plan repeats the previous plan's last frame as its first: skip it so the figure keeps moving.
+            const skip = state.tail ? 1 : 0;
+            enqueue(prepareClip({ frames: motion.frames - skip, values: motion.values.subarray(skip * FRAME_VALUES) }));
             return;
         }
         // The source is the last generated clip's last frames, placed where that clip ended; the first clip starts from standing.

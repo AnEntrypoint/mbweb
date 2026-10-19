@@ -68,6 +68,13 @@ jobs:
       - name: Assemble the site
         run: scripts/build-site.sh
 
+      - name: Keep the assembled site for the WebKit job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: site
+          path: site
+          retention-days: 1
+
       - name: Smoke test in Chromium (PRD-04, PRD-05)
         run: npm run smoke
 
@@ -90,3 +97,32 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
+
+  # Safari's engine: the same smoke checks in WebKit on a macOS runner, with the site the build job assembled.
+  webkit:
+    needs: build
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Download the assembled site
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: site
+          path: site
+
+      - name: Install WebKit
+        run: npx --yes playwright@1.55.1 install webkit
+
+      - name: Smoke test in WebKit (Safari engine)
+        run: npm run smoke
+        env:
+          BROWSER: webkit

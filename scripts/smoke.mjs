@@ -5,12 +5,13 @@
 //
 // Usage: npm run smoke   (needs site/ from scripts/build-site.sh and network access to Hugging Face)
 // Env:   CHROMIUM_PATH   Chromium executable (default: Playwright's bundled browser)
+//        BROWSER         chromium (default) or webkit
 //        RESULTS_JSON    if set, the measurements are written to this path
 import { readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { extname, join, normalize, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright-core';
+import { chromium, webkit } from 'playwright-core';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SITE = join(ROOT, 'site');
@@ -70,10 +71,11 @@ async function pauseIfPlaying(page) {
 
 const server = await serve();
 const url = `http://127.0.0.1:${server.address().port}/`;
-const browser = await chromium.launch({
-    executablePath: process.env.CHROMIUM_PATH || undefined,
-    args: ['--no-sandbox'],
-});
+// BROWSER=webkit runs the same checks in WebKit, the engine behind Safari; the default is Chromium.
+const engine = process.env.BROWSER === 'webkit' ? 'webkit' : 'chromium';
+const browser = await (engine === 'webkit' ? webkit : chromium).launch(engine === 'chromium'
+    ? { executablePath: process.env.CHROMIUM_PATH || undefined, args: ['--no-sandbox'] }
+    : {});
 
 try {
     const context = await browser.newContext();
