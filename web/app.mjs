@@ -59,6 +59,7 @@ const state = {
     lookahead: 48, // frames ahead of the playhead where the next plan's seam is placed
     lastTick: 0,
     lastPlanAt: 0, // playhead when the last plan was requested
+    agentBase: 0, // the reference frame where the worker's agent plan starts
     walkDir: 1, // direction of the walk along the session's forward axis: +1 or -1
     legEnd: null, // where the current leg of the walk ends, in metres along the session's forward axis
     goalPx: null, // a clicked point on the stage in pixels, until the figure reaches it
@@ -442,7 +443,7 @@ function stopPlayback() {
 // streaming server does, a plan is placed at a seam ahead of the playhead, seeded with the four reference frames at
 // the seam, and its first frames are blended into the reference.
 const PLAN_BELOW = 40; // frames of reference left ahead of the playhead that trigger the next plan
-const PLAN_CADENCE = 16; // frames of playback between plan requests, as the demo replans at its walk cadence
+const PLAN_CADENCE = 16; // frames of playback between plan requests, the demo's walk cadence
 const TRANSITION_FRAMES = 8; // frames over which a plan is blended into the reference at its seam
 const START_FRAMES = 80; // playback starts once the reference holds this many frames, so the next plan has room to arrive
 
@@ -466,7 +467,10 @@ async function planAhead() {
         // The plan takes over from the frame on screen, as the demo's replans do: its first frame is the reference at the
         // seam, so it continues the motion the figure is showing.
         // Before playback starts a plan extends the reference from its end; after that it takes over at the playhead.
-        const seam = ref ? (state.started ? Math.min(Math.floor(state.playhead), ref.frames - 4) : ref.frames - 4) : 0;
+        // The plan starts at the frame on screen, as the demo's web client does. Before playback starts it extends the
+        // reference from its end.
+        const seam = ref ? (state.started ? Math.floor(state.playhead) : Math.max(0, ref.frames - 4)) : 0;
+        const contextSeam = ref ? Math.min(seam, ref.frames - 4) : 0;
         state.lastPlanAt = state.playhead;
         const walk = chooseWalk();
         const motion = await request({
@@ -476,10 +480,12 @@ async function planAhead() {
             speed: -1,
             target: walk.nearStop ? { z: state.legEnd } : null,
             seed: state.seed,
-            context: ref ? contextAt(seam) : null,
+            context: ref ? contextAt(contextSeam) : null,
+            advance: ref ? seam - state.agentBase : null,
         });
         state.seed += 1;
         mergePlan(seam, motion);
+        state.agentBase = seam;
     } catch (error) {
         fail(`Cannot generate a motion: ${error.message}`);
     } finally {
@@ -540,7 +546,8 @@ function mergePlan(seam, motion) {
     document.body.dataset.frames = String(n);
     if (!state.started && total >= START_FRAMES) {
         state.started = true;
-        state.playhead = 0;
+        // Start at the newest plan's first frame: the agent's current plan begins there, so the next plan continues it.
+        state.playhead = seam;
         drawFrame(0);
         startPlayback();
     }

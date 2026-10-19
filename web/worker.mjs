@@ -122,13 +122,18 @@ async function loadAgent(styleFiles) {
     standingHeight = globalRoot[1];
 }
 
-// One planned motion, the way the upstream streaming server plans it: a fresh agent is seeded with four frames of
-// context (the reference at the seam, or standing at the start), then plans from the command.
-function planThreaded({ style, direction, speed, target, seed, context }) {
+// One planned motion, as the demo's web client plans it: one agent per session. Each plan advances that agent to the frame
+// on screen (advance) and plans from there, so its motion continues the one it generated. A new agent is seeded from
+// four frames of context when there is no session yet, or when the frame on screen is outside the agent's last plan.
+let session = 0;
+let sessionFrames = 0;
+
+function seedSession(context, handle) {
     const x = threaded.exports;
-    const handle = styles.get(style);
-    const heading = direction > 0 ? 0 : Math.PI;
-    const hasTarget = target ? 1 : 0;
+    if (session !== 0) x.mb_agent_free(session);
+    session = x.mb_agent_new();
+    if (session === 0) throw threadedError('agent');
+    if (x.mb_agent_reset(session, handle) !== 0) throw threadedError('agent reset');
     const roots = new Float32Array(12);
     const rotations = new Float32Array(4 * 34 * 4);
     if (context) {
@@ -138,23 +143,33 @@ function planThreaded({ style, direction, speed, target, seed, context }) {
         for (let frame = 0; frame < 4; frame++) roots[frame * 3 + 1] = standingHeight;
         for (let joint = 0; joint < 4 * 34; joint++) rotations[joint * 4 + 3] = 1;
     }
-    const agent = x.mb_agent_new();
-    if (agent === 0) throw threadedError('agent');
     const rootPtr = x.mb_alloc(roots.byteLength);
     const rotationPtr = x.mb_alloc(rotations.byteLength);
     new Float32Array(threaded.memory.buffer, rootPtr, roots.length).set(roots);
     new Float32Array(threaded.memory.buffer, rotationPtr, rotations.length).set(rotations);
-    if (x.mb_agent_context(agent, rootPtr, rotationPtr, 4) !== 0) throw threadedError('agent context');
+    const status = x.mb_agent_context(session, rootPtr, rotationPtr, 4);
     x.mb_free(rootPtr);
     x.mb_free(rotationPtr);
-    const command = x.mb_command_new(handle, 0, 0, direction, 0, 0, direction, speed, hasTarget,
+    if (status !== 0) throw threadedError('agent context');
+}
+
+function planThreaded({ style, direction, speed, target, seed, context, advance }) {
+    const x = threaded.exports;
+    const handle = styles.get(style);
+    const heading = direction > 0 ? 0 : Math.PI;
+    const reuse = session !== 0 && advance !== null && advance >= 0 && advance < sessionFrames;
+    if (reuse) {
+        if (x.mbx_agent_advance(session, advance) !== 0) throw threadedError('agent advance');
+    } else {
+        seedSession(context, handle);
+    }
+    const command = x.mb_command_new(handle, 0, 0, direction, 0, 0, direction, speed, target ? 1 : 0,
                                      0, 0.787, target ? target.z : 0, heading, BigInt(seed));
     const framesPtr = x.mb_alloc(4);
     const outRootsPtr = x.mb_alloc(4);
     const outRotationsPtr = x.mb_alloc(4);
-    const status = x.mbx_agent_plan(agent, command, framesPtr, outRootsPtr, outRotationsPtr);
+    const status = x.mbx_agent_plan(session, command, framesPtr, outRootsPtr, outRotationsPtr);
     x.mb_command_free_handle(command);
-    x.mb_agent_free(agent);
     if (status !== 0) throw threadedError('plan');
     const view = new DataView(threaded.memory.buffer);
     const frames = view.getUint32(framesPtr, true);
@@ -168,6 +183,7 @@ function planThreaded({ style, direction, speed, target, seed, context }) {
     x.mb_free(rootsAt);
     x.mb_free(rotationsAt);
     for (const pointer of [framesPtr, outRootsPtr, outRotationsPtr]) x.mb_free(pointer);
+    sessionFrames = frames;
     return { frames, values };
 }
 
