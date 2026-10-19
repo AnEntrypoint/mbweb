@@ -68,7 +68,7 @@ mkdir -p "$COMP"
 wit-bindgen c "$ROOT/wit" --world motionbricks --out-dir "$ROOT/component/gen" >&2
 
 CLANG="$SDK/bin/clang"
-CFLAGS=(--target=wasm32-wasip3 -O2 -DNDEBUG -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_CLOCKS
+CFLAGS=(--target=wasm32-wasip3 -O2 -msimd128 -DNDEBUG -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_CLOCKS
         -I"$SRC/include" -I"$ROOT/component" -Wall -Wextra -Wno-unused-parameter)
 "$CLANG" "${CFLAGS[@]}" -c "$ROOT/component/motionbricks.c" -o "$COMP/glue.o"
 "$CLANG" "${CFLAGS[@]}" -c "$ROOT/component/gen/motionbricks.c" -o "$COMP/bindings.o"

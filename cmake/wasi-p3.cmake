@@ -20,6 +20,8 @@ set(MB_WASI_EMULATION_DEFINES "-D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_
 # (src/error.hpp, src/neural_runtime.cpp, ggml/src/gguf.cpp) and SONIC is excluded.
 # gguf.cpp uses errno without including it, which the WASI C++ headers do not provide.
 set(MB_WASM_NOEH_FLAGS "-fno-exceptions")
-set(CMAKE_C_FLAGS_INIT "${CMAKE_C_FLAGS_INIT} ${MB_WASI_EMULATION_DEFINES}")
-set(CMAKE_CXX_FLAGS_INIT "${CMAKE_CXX_FLAGS_INIT} ${MB_WASI_EMULATION_DEFINES} ${MB_WASM_NOEH_FLAGS} -include errno.h")
+# ggml selects its WebAssembly kernels only when the compiler reports SIMD128; without this flag the core is scalar.
+set(MB_WASM_SIMD_FLAGS "-msimd128")
+set(CMAKE_C_FLAGS_INIT "${CMAKE_C_FLAGS_INIT} ${MB_WASI_EMULATION_DEFINES} ${MB_WASM_SIMD_FLAGS}")
+set(CMAKE_CXX_FLAGS_INIT "${CMAKE_CXX_FLAGS_INIT} ${MB_WASI_EMULATION_DEFINES} ${MB_WASM_NOEH_FLAGS} ${MB_WASM_SIMD_FLAGS} -include errno.h")
 set(CMAKE_EXE_LINKER_FLAGS_INIT "${CMAKE_EXE_LINKER_FLAGS_INIT} -lwasi-emulated-signal -lwasi-emulated-process-clocks")
