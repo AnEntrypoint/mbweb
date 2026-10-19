@@ -5,6 +5,14 @@ import { fetchModel } from './lib/model.mjs';
 import { instantiateComponent, stageBundle } from './lib/component.mjs';
 import { loadThreadedCore } from './lib/threads-host.mjs';
 
+// Uncaught errors and rejections are reported with their text, so a failure in one engine can be read from the page.
+self.addEventListener('error', (event) => {
+    self.postMessage({ type: 'error', message: `worker error: ${event.message || event.error?.message || 'unknown'} (${event.filename}:${event.lineno})` });
+});
+self.addEventListener('unhandledrejection', (event) => {
+    self.postMessage({ type: 'error', message: `worker rejected: ${event.reason?.message ?? event.reason}` });
+});
+
 const componentBase = new URL('./component/', self.location.href);
 const threadedModule = new URL('./threads/motionbricks-threads.wasm', self.location.href);
 const threadWorker = new URL('./threads-worker.js', self.location.href);

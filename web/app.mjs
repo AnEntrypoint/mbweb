@@ -99,7 +99,7 @@ worker.onmessage = ({ data }) => {
     }
 };
 
-worker.onerror = (event) => fail(`Cannot run the motion model: ${event.message || 'worker failed'}`);
+worker.onerror = (event) => fail(`Cannot run the motion model: ${event.message || 'worker failed'} (${event.filename || 'worker script did not load'})`);
 
 function request(message, transfer = []) {
     const id = state.nextId++;
