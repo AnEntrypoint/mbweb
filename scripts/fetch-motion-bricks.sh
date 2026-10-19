@@ -25,6 +25,11 @@ if [ ! -d "$SRC/.git" ]; then
     GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 "$UPSTREAM_URL" "$SRC" >&2
 fi
 if [ "$(git -C "$SRC" rev-parse HEAD)" != "$UPSTREAM_COMMIT" ]; then
+    # A shallow cache left on the default branch: fetch the pinned commit itself, then check it out.
+    git -C "$SRC" fetch --quiet --depth 1 origin "$UPSTREAM_COMMIT" >&2
+    git -C "$SRC" checkout --quiet "$UPSTREAM_COMMIT" >&2
+fi
+if [ "$(git -C "$SRC" rev-parse HEAD)" != "$UPSTREAM_COMMIT" ]; then
     log "upstream HEAD is not $UPSTREAM_COMMIT; refusing to build an unpinned source"
     exit 1
 fi

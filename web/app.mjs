@@ -27,6 +27,10 @@ const state = {
     startFrame: 0,
     generating: false,
     steerHeading: null,
+    span: null, // one scale for the whole session, set from the first clip
+    extent: { maxUp: 0, maxDown: 0, maxSide: 0 }, // largest reach over all clips so far
+    blend: null, // the outgoing clip's pelvis-relative pose, eased into the next clip
+    looping: false,
 };
 
 function setStatus(text, stateName) {
@@ -144,8 +148,10 @@ const TURN_RATE = 1.8; // radians per second when turning toward a destination o
 // too little root travel to walk anywhere, so the pace is set here and the feet slide on the ground.
 const WALK_PACE = 0.12;
 const WANDER = 1.1; // how strongly the heading drifts while wandering
+const BLEND_FRAMES = 8; // frames over which a new clip eases in from the outgoing pose
+const FACE_BAND = 0.25; // the figure turns around only once the heading is this far past vertical
 const mouse = { x: null, y: null };
-const body = { x: null, y: null, heading: 0, turnRate: 0, last: 0, target: null };
+const body = { x: null, y: null, heading: 0, turnRate: 0, last: 0, target: null, facing: 1 };
 
 function resizeCanvas() {
     const ratio = window.devicePixelRatio || 1;
@@ -220,6 +226,18 @@ function updateBody(now, width, height, speedPx, playing, bounds) {
     }
 }
 
+// Pelvis-relative side-view offsets for one frame, as [depth, height] pairs in model units.
+function pelvisOffsets(clip, frame) {
+    const { positions } = clip;
+    const base = frame * JOINTS * 3;
+    const out = new Float32Array(JOINTS * 2);
+    for (let joint = 0; joint < JOINTS; joint++) {
+        out[joint * 2] = positions[base + joint * 3 + 2] - positions[base + 2];
+        out[joint * 2 + 1] = positions[base + joint * 3 + 1] - positions[base + 1];
+    }
+    return out;
+}
+
 function drawFrame(frame) {
     const width = els.canvas.clientWidth;
     const height = els.canvas.clientHeight;
@@ -227,11 +245,9 @@ function drawFrame(frame) {
     ctx.fillRect(0, 0, width, height);
     if (!state.clip) return;
 
-    const { positions, minY, span } = state.clip;
+    // One scale and one set of extents for the whole session, so the figure keeps its size across clips.
+    const { span, extent } = state;
     const scale = (Math.min(width, height) * 0.3) / span;
-    const base = frame * JOINTS * 3;
-    const pelvisZ = positions[base + 2];
-    const pelvisY = positions[base + 1];
     // Frames stepped since the last draw; the loop point (wrap-around) is not travel.
     const steps = (frame - state.frame + state.clip.frames) % state.clip.frames;
     const speedPx = steps > 0 && steps < state.clip.frames / 2
@@ -239,21 +255,36 @@ function drawFrame(frame) {
         : 0;
     const pad = 6;
     const bounds = {
-        left: state.clip.maxSide * scale + pad,
-        right: width - state.clip.maxSide * scale - pad,
-        top: state.clip.maxUp * scale + pad,
-        bottom: height - state.clip.maxDown * scale - pad,
+        left: extent.maxSide * scale + pad,
+        right: width - extent.maxSide * scale - pad,
+        top: extent.maxUp * scale + pad,
+        bottom: height - extent.maxDown * scale - pad,
     };
     updateBody(performance.now(), width, height, speedPx, state.playing, bounds);
     const cx = body.x;
     const cy = body.y;
-    // Face the direction of travel: mirror the side view when walking left.
-    const facing = Math.cos(body.heading) < 0 ? -1 : 1;
+    // Face the direction of travel: mirror the side view when walking left. The flip waits until the heading is
+    // clearly past vertical, so a heading that hovers near it does not flicker the figure.
+    if (body.facing === 1 && Math.cos(body.heading) < -FACE_BAND) body.facing = -1;
+    else if (body.facing === -1 && Math.cos(body.heading) > FACE_BAND) body.facing = 1;
+    const facing = body.facing;
+    const offsets = pelvisOffsets(state.clip, frame);
+    if (state.blend) {
+        // Ease the pose from the outgoing clip's last frame into this clip over its first frames.
+        const weight = Math.max(0, 1 - frame / BLEND_FRAMES);
+        const eased = weight * weight * (3 - 2 * weight);
+        for (let i = 0; i < offsets.length; i++) offsets[i] += (state.blend[i] - offsets[i]) * eased;
+        if (frame >= BLEND_FRAMES) state.blend = null;
+    }
 
     ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--ground').trim() || '#b9b3a6';
     for (const obstacle of OBSTACLES) {
         ctx.fillRect(obstacle.x * width, obstacle.y * height, obstacle.w * width, obstacle.h * height);
     }
+    // A shadow under the feet keeps the figure reading as standing on the stage while it walks.
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + extent.maxDown * scale, extent.maxSide * scale * 0.8 + 4, 3, 0, 0, Math.PI * 2);
+    ctx.fill();
 
     ctx.strokeStyle = getComputedStyle(document.body).getPropertyValue('--ink').trim() || '#1d1b18';
     ctx.fillStyle = ctx.strokeStyle;
@@ -261,8 +292,8 @@ function drawFrame(frame) {
     ctx.lineCap = 'round';
     // Side view of the skeleton at the pelvis position; copies one stage away keep it whole at the edges.
     const toScreen = (joint, dx, dy) => [
-        cx + dx + facing * (positions[base + joint * 3 + 2] - pelvisZ) * scale,
-        cy + dy - (positions[base + joint * 3 + 1] - pelvisY) * scale,
+        cx + dx + facing * offsets[joint * 2] * scale,
+        cy + dy - offsets[joint * 2 + 1] * scale,
     ];
     for (const dx of [-width, 0, width]) {
         for (const dy of [-height, 0, height]) {
@@ -305,7 +336,17 @@ async function generate() {
             },
         );
         state.seed += 1;
-        state.clip = prepareClip(motion);
+        const clip = prepareClip(motion);
+        // The outgoing pose is captured before the swap so the new clip can ease in from it.
+        const outgoing = state.clip ? pelvisOffsets(state.clip, state.frame) : null;
+        if (state.span === null) state.span = clip.span;
+        state.extent = {
+            maxUp: Math.max(state.extent.maxUp, clip.maxUp),
+            maxDown: Math.max(state.extent.maxDown, clip.maxDown),
+            maxSide: Math.max(state.extent.maxSide, clip.maxSide),
+        };
+        state.clip = clip;
+        state.blend = outgoing;
         els.scrub.max = String(motion.frames - 1);
         els.scrub.disabled = false;
         els.play.disabled = false;
@@ -346,7 +387,11 @@ function startPlayback() {
     state.startFrame = state.frame;
     els.play.textContent = 'Pause';
     els.play.setAttribute('aria-pressed', 'true');
-    requestAnimationFrame(tick);
+    // One loop at a time: a second would draw each tick twice, and one is added per generated clip.
+    if (!state.looping) {
+        state.looping = true;
+        requestAnimationFrame(tick);
+    }
 }
 
 function stopPlayback() {
@@ -356,14 +401,18 @@ function stopPlayback() {
 }
 
 function tick(now) {
-    if (!state.playing || !state.clip) return;
+    if (!state.playing || !state.clip) {
+        state.looping = false;
+        return;
+    }
     const elapsed = (now - state.startedAt) / 1000;
     const position = state.startFrame + Math.floor(elapsed * FPS);
     if (position >= state.clip.frames && !state.generating) {
         // The clip has played through: the figure keeps walking with the next generated clip.
         generate();
     }
-    const frame = position % state.clip.frames;
+    // While the next clip is generated, the last frame holds instead of looping the old clip into a seam.
+    const frame = Math.min(position, state.clip.frames - 1);
     if (frame !== state.frame) drawFrame(frame);
     requestAnimationFrame(tick);
 }
