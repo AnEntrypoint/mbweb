@@ -54,10 +54,15 @@ node --experimental-wasm-jspi scripts/diagnose-chain.mjs http://127.0.0.1:8790/c
 SHA-256 before the component sees it.
 
 Node 22 cannot run the component: the transpiled code uses WebAssembly JS Promise Integration
-(JSPI), which Chrome and Edge ship from version 137. The page needs JSPI too, so Firefox and Safari
-will show an error message instead of a blank page.
+(JSPI), which Chrome and Edge ship from version 137. The single-thread fallback needs JSPI, so browsers
+without it rely on the threaded core (see Browser support below).
 
 ## Deploy
 
 Pages deploys from `.github/workflows/pages.yml` on pushes to `main`. In the repository settings,
 set Pages to build from GitHub Actions.
+
+## Browser support
+
+- **Chrome and Edge:** the threaded core runs when the page is cross-origin isolated; the service worker supplies the headers on GitHub Pages.
+- **Safari:** the threaded core needs `SharedArrayBuffer`, which Safari supports with cross-origin isolation (Safari 15.2 or later). The single-thread fallback needs WebAssembly JS Promise Integration, which Safari does not have, so Safari depends on the threaded path. This has not been run in Safari yet: the checks here use Chromium only.

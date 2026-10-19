@@ -25,7 +25,7 @@ function onProgressFor() {
 
 async function loadComponent(files) {
     if (typeof WebAssembly.Suspending !== 'function') {
-        throw new Error('This page needs WebAssembly JS Promise Integration (Chrome or Edge 137 or later).');
+        throw new Error('This browser cannot run the motion model: it needs cross-origin isolation (SharedArrayBuffer, Safari 15.2 or later with the service worker) or WebAssembly JS Promise Integration (Chrome or Edge 137 or later).');
     }
     self.postMessage({ type: 'stage', text: 'Loading the model into the component' });
     inference = await instantiateComponent(componentBase);

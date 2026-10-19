@@ -50,6 +50,9 @@ const state = {
     extent: { maxUp: 0, maxDown: 0, maxSide: 0 }, // largest reach over all clips so far
     blend: null, // the outgoing clip's pelvis-relative pose, eased into the next clip
     looping: false,
+    walkDir: 1, // direction of the walk along the session's forward axis: +1 or -1
+    legEnd: null, // where the current leg of the walk ends, in metres along the session's forward axis
+    goalPx: null, // a clicked point on the stage in pixels, until the figure reaches it
 };
 
 function setStatus(text, stateName) {
@@ -151,16 +154,20 @@ function prepareClip(motion) {
 
 const wrapAngle = (angle) => Math.atan2(Math.sin(angle), Math.cos(angle));
 
-// The stage is a floor with blocks standing on it. The figure walks left or right along the floor, turns around
-// at a block or an edge, and walks toward a clicked point when there is one.
+// The stage is a floor the camera follows the figure across. The figure's place along the floor is the model's own
+// root trajectory in the session frame, so the floor and blocks move past it as it walks. Blocks are placed in that
+// frame, so the model's walk is what decides whether it reaches one.
 const FLOOR_FRACTION = 0.8; // floor height as a share of the stage height
-const OBSTACLES = [ // on the floor: left edge, width, and height as shares of the stage
-    { x: 0.22, w: 0.08, h: 0.14 },
-    { x: 0.52, w: 0.10, h: 0.10 },
-    { x: 0.76, w: 0.07, h: 0.18 },
+const FIGURE_FRACTION = 0.4; // the figure is held at this share of the stage width
+const WORLD_BLOCKS = [ // metres along the walk in the session frame: start, width, height
+    { z: 4.0, w: 0.5, h: 0.45 },
+    { z: 9.0, w: 0.5, h: 0.35 },
+    { z: 14.0, w: 0.5, h: 0.5 },
 ];
+const WORLD_LIMITS = { min: -3.0, max: 17.0 }; // metres: the walk turns round at these
+const LEG_METRES = 6; // the figure walks one way for up to this far before coming back
+const FIGURE_HALF = 0.3; // metres from the pelvis to the figure's front or back
 const BLEND_FRAMES = 8; // frames over which a new clip eases in from the outgoing pose
-const body = { x: null, dir: 1, target: null };
 
 function resizeCanvas() {
     const ratio = window.devicePixelRatio || 1;
@@ -172,42 +179,45 @@ function resizeCanvas() {
     drawFrame(state.frame);
 }
 
-// True when a figure centred at x (half-width hw) overlaps any block on the floor.
-function obstacleAt(x, hw, width) {
-    return OBSTACLES.some((o) => x + hw > o.x * width && x - hw < (o.x + o.w) * width);
-}
-
 // Pixels per metre of the session's figure: one scale for the whole session.
 function stageScale() {
     if (state.span === null) return 1;
     return (Math.min(els.canvas.clientWidth, els.canvas.clientHeight) * 0.3) / state.span;
 }
 
-// Walks the figure along the floor. The step is the clip's own pelvis travel since the last drawn frame, so the body
-// moves with the model's motion. Reaching a clicked point clears it; a block or an edge stops the body in place until
-// the next clip turns it, which is decided before the clip is generated.
-function updateBody(step, playing, bounds, width) {
-    if (body.target !== null && Math.abs(body.target - body.x) < 8) body.target = null;
-    if (!playing) return;
-    const next = body.x + body.dir * step;
-    if (next - bounds.half < bounds.left || next + bounds.half > bounds.right || obstacleAt(next, bounds.half, width)) {
-        return;
+// Metres the figure can walk from z in a direction before a block or a limit of the walk stops it.
+function runFrom(z, direction) {
+    let run = direction > 0 ? WORLD_LIMITS.max - z : z - WORLD_LIMITS.min;
+    for (const block of WORLD_BLOCKS) {
+        if (direction > 0 && block.z >= z) run = Math.min(run, block.z - FIGURE_HALF - z);
+        if (direction < 0 && block.z + block.w <= z) run = Math.min(run, z - (block.z + block.w) - FIGURE_HALF);
     }
-    body.x = next;
+    return run;
 }
 
-// The direction of the next clip: towards a clicked point if there is one, otherwise the current direction. A
-// direction that would walk into a block or off the stage is reversed before the clip is generated.
-function chooseDirection() {
-    if (body.x === null) return body.dir;
-    const width = els.canvas.clientWidth;
-    const scale = stageScale();
-    const half = state.extent.maxSide * scale + 6;
-    const dir = body.target !== null ? Math.sign(body.target - body.x) || body.dir : body.dir;
-    const ahead = body.x + dir * WALK_DISTANCE * scale;
-    const blocked = ahead - half < 6 || ahead + half > width - 6 || obstacleAt(ahead, half, width);
-    body.dir = blocked ? -dir : dir;
-    return body.dir;
+// Where the next clip walks: its direction and the distance it aims for. A clicked point sets the direction until the
+// figure reaches it. A block or a limit closer than a clip's stride shortens the clip, so the model stops short of it;
+// when the way ahead is shorter than a stride and the other way has more room, the figure turns round.
+function chooseWalk() {
+    const tail = state.tail;
+    const z = tail ? tail.values[(tail.frames - 1) * FRAME_VALUES + 2] : 0;
+    let dir = state.walkDir;
+    if (state.goalPx !== null) {
+        const goal = z + (state.goalPx - els.canvas.clientWidth * FIGURE_FRACTION) / stageScale();
+        if (Math.abs(goal - z) < 0.1) state.goalPx = null;
+        else dir = Math.sign(goal - z);
+    }
+    const need = WALK_DISTANCE;
+    // A leg is one way for a stretch. It ends at its far point, or early at a block or limit, and the walk comes back.
+    const legDone = state.legEnd !== null && Math.abs(state.legEnd - z) < 0.3;
+    const blocked = runFrom(z, dir) < need;
+    if (state.legEnd === null || legDone || blocked) {
+        if (blocked && runFrom(z, -dir) > runFrom(z, dir)) dir = -dir;
+        else if (legDone) dir = -dir;
+        state.legEnd = z + dir * Math.min(LEG_METRES, runFrom(z, dir));
+    }
+    state.walkDir = dir;
+    return { direction: dir, distance: Math.max(0.2, Math.min(need, Math.abs(state.legEnd - z))) };
 }
 
 // Pelvis-relative side-view offsets for one frame, as [depth, height] pairs in model units.
@@ -232,18 +242,14 @@ function drawFrame(frame) {
     // One scale and one set of extents for the whole session, so the figure keeps its size across clips.
     const { span, extent } = state;
     const scale = (Math.min(width, height) * 0.3) / span;
-    // Frames stepped since the last draw; the loop point (wrap-around) is not travel.
-    const steps = (frame - state.frame + state.clip.frames) % state.clip.frames;
-    const speedPx = steps > 0 && steps < state.clip.frames / 2
-        ? state.clip.speed[frame] * steps * (Math.min(width, height) * 0.3) / span
-        : 0;
     const floorY = height * FLOOR_FRACTION;
-    const half = extent.maxSide * scale + 6;
-    if (body.x === null) body.x = width * 0.15;
-    updateBody(speedPx, state.playing, { left: 6, right: width - 6, half }, width);
-    // The feet stand on the floor: the pelvis sits as far above it as the figure's deepest joint reaches.
-    const cx = body.x;
-    const cy = floorY - extent.maxDown * scale;
+    // The camera holds the figure: its pelvis is the model's root at this frame, and the floor moves past it.
+    const rootZ = state.clip.values[frame * FRAME_VALUES + 2];
+    const toStage = (z) => width * FIGURE_FRACTION + (z - rootZ) * scale;
+    // The pelvis is placed at the model's own root height: the floor is the model's ground plane, as in the upstream
+    // demo, which writes the model's root into the robot's pose without adjusting it.
+    const cx = width * FIGURE_FRACTION;
+    const cy = floorY - state.clip.values[frame * FRAME_VALUES + 1] * scale;
     // The side view always faces the way the model walks: the model is aimed along the floor.
     const facing = 1;
     const offsets = pelvisOffsets(state.clip, frame);
@@ -259,8 +265,10 @@ function drawFrame(frame) {
     ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--ink').trim() || '#1d1b18';
     ctx.fillRect(0, floorY, width, 2);
     ctx.fillStyle = ground;
-    for (const block of OBSTACLES) {
-        ctx.fillRect(block.x * width, floorY - block.h * height, block.w * width, block.h * height);
+    for (const block of WORLD_BLOCKS) {
+        const left = toStage(block.z);
+        const right = toStage(block.z + block.w);
+        ctx.fillRect(left, floorY - block.h * scale, right - left, block.h * scale);
     }
     ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--ink').trim() || '#1d1b18';
 
@@ -269,14 +277,9 @@ function drawFrame(frame) {
     ctx.lineWidth = Math.max(2, scale * 0.04);
     ctx.lineCap = 'round';
     // Side view of the skeleton at the pelvis position; copies one stage away keep it whole at the edges.
-    // Pin this frame's lowest joint to the ground line the shadow sits on, so a frame that rises off its floor
-    // or sinks into it neither floats nor cuts through the shadow. Maximum drop over the session sets the line.
-    let lowest = 0;
-    for (let joint = 0; joint < JOINTS; joint++) lowest = Math.min(lowest, offsets[joint * 2 + 1]);
-    const lift = (extent.maxDown + lowest) * scale;
     const toScreen = (joint, dx, dy) => [
         cx + dx + facing * offsets[joint * 2] * scale,
-        cy + dy + lift - offsets[joint * 2 + 1] * scale,
+        cy + dy - offsets[joint * 2 + 1] * scale,
     ];
     for (const dx of [-width, 0, width]) {
         for (const dy of [-height, 0, height]) {
@@ -315,7 +318,8 @@ function fillQueue() {
 async function produce() {
     if (!state.standing || state.generating) return;
     state.generating = true;
-    setStatus('Generating a motion clip', 'generating');
+    // Only the first clip is awaited on screen; later clips are prefetched while the current one plays.
+    if (!state.clip) setStatus('Generating a motion clip', 'generating');
     try {
         // The source is the last generated clip's last frames, placed where that clip ended; the first clip starts from standing.
         const previous = state.tail;
@@ -330,9 +334,9 @@ async function produce() {
             };
         // Each clip walks to a point ahead of the last one, with a small random turn, so the figure keeps moving.
         // Aim the clip along the floor: the model walks toward the target, so its heading turns to the chosen direction.
-        const direction = chooseDirection();
+        const walk = chooseWalk();
         const heading = previous ? headingAt(previous.values, previous.frames - 1) : 0;
-        aimTargets(source, { distance: WALK_DISTANCE, turn: wrapAngle((direction > 0 ? 0 : Math.PI) - heading) });
+        aimTargets(source, { distance: walk.distance, turn: wrapAngle((walk.direction > 0 ? 0 : Math.PI) - heading) });
         const motion = await request({
             type: 'infer',
             globalRoot: source.globalRoot,
@@ -436,7 +440,7 @@ function tick(now) {
 
 els.canvas.addEventListener('pointerdown', (event) => {
     const rect = els.canvas.getBoundingClientRect();
-    body.target = event.clientX - rect.left;
+    state.goalPx = event.clientX - rect.left;
 });
 els.play.addEventListener('click', () => {
     if (!state.clip) return;
