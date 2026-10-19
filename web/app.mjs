@@ -288,9 +288,14 @@ function drawFrame(frame) {
     ctx.lineWidth = Math.max(2, scale * 0.04);
     ctx.lineCap = 'round';
     // Side view of the skeleton at the pelvis position; copies one stage away keep it whole at the edges.
+    // Pin this frame's lowest joint to the ground line the shadow sits on, so a frame that rises off its floor
+    // or sinks into it neither floats nor cuts through the shadow. Maximum drop over the session sets the line.
+    let lowest = 0;
+    for (let joint = 0; joint < JOINTS; joint++) lowest = Math.min(lowest, offsets[joint * 2 + 1]);
+    const lift = (extent.maxDown + lowest) * scale;
     const toScreen = (joint, dx, dy) => [
         cx + dx + facing * offsets[joint * 2] * scale,
-        cy + dy - offsets[joint * 2 + 1] * scale,
+        cy + dy + lift - offsets[joint * 2 + 1] * scale,
     ];
     for (const dx of [-width, 0, width]) {
         for (const dy of [-height, 0, height]) {

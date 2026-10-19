@@ -13,6 +13,29 @@ JOBS="${JOBS:-$(nproc)}"
 
 log() { echo "build-component: $*" >&2; }
 
+# Fail before the long downloads and compiles when a tool is missing, and say how to install the pinned version.
+missing=0
+need() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        log "missing '$1' on PATH: $2"
+        missing=1
+    fi
+}
+need cmake "install CMake 3.20 or later"
+need ninja "install Ninja"
+need cargo "install Rust with rustup"
+need wit-bindgen "cargo install wit-bindgen-cli --version 0.63.0 --locked"
+need wasm-tools "cargo install wasm-tools --version 1.262.0 --locked"
+[ "$missing" -eq 0 ] || exit 1
+for tool in "wit-bindgen 0.63.0" "wasm-tools 1.262.0"; do
+    name="${tool% *}"
+    want="${tool#* }"
+    if ! "$name" --version 2>/dev/null | grep -q "$want"; then
+        log "$name is not $want: $("$name" --version 2>/dev/null | head -n 1)"
+        exit 1
+    fi
+done
+
 SDK="$("$ROOT/scripts/fetch-wasi-sdk.sh" "$CACHE")"
 SRC="$("$ROOT/scripts/fetch-motion-bricks.sh" "$CACHE")"
 export WASI_SDK_PREFIX="$SDK"

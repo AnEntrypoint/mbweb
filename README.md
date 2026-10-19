@@ -46,6 +46,8 @@ scripts/build-component.sh    # core, component, and jco transpile (build/)
 scripts/build-site.sh         # page and site/ for Pages
 npm run smoke                 # needs Chromium: CHROMIUM_PATH=... or Playwright's bundled build
 scripts/native-check.sh       # optional: native build and one inference call
+node --experimental-wasm-jspi scripts/diagnose-chain.mjs http://127.0.0.1:8790/component/
+                              # headless: standing stability and chained-clip fidelity (serve site/ first)
 ```
 
 `npm run smoke` downloads the 733 MB model from Hugging Face on a cold run and checks every file's

@@ -59,11 +59,18 @@ static mb_status standing_from_model(const mb_model * model, float * global_root
                                                                &z[joint], error, error_capacity);
         if (status != MB_OK) return status;
     }
+    /* The neutral skeleton is pelvis-centred, so its feet sit below y = 0. Lift the whole figure so its lowest
+     * joint stands on the floor; a source below the floor makes the model fold the figure into a crouch. */
+    float lowest = y[0];
+    for (uint32_t joint = 1; joint < JOINTS; ++joint) {
+        if (y[joint] < lowest) lowest = y[joint];
+    }
+    const float lift = -lowest;
     memset(local_root, 0, LOCAL_ROOT_VALUES * sizeof(float));
     for (uint32_t slot = 0; slot < 8U; ++slot) {
         float * root = global_root + 5U * slot;
         root[0] = 0.0f;
-        root[1] = y[0];
+        root[1] = y[0] + lift;
         root[2] = 0.0f;
         root[3] = 1.0f;
         root[4] = 0.0f;
@@ -71,7 +78,7 @@ static mb_status standing_from_model(const mb_model * model, float * global_root
         float * row = pose + 303U * slot;
         for (uint32_t joint = 1; joint < JOINTS; ++joint) {
             row[3U * (joint - 1U) + 0U] = x[joint] - x[0];
-            row[3U * (joint - 1U) + 1U] = y[joint];
+            row[3U * (joint - 1U) + 1U] = y[joint] + lift;
             row[3U * (joint - 1U) + 2U] = z[joint] - z[0];
         }
         for (uint32_t joint = 0; joint < JOINTS; ++joint) {

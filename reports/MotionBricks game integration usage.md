@@ -79,3 +79,12 @@ The change in this update:
 Verification: the coordinate math passes a Node check against a synthetic skeleton (canonical pose rows match forward kinematics, the orientation columns match, and the transform round-trips to about 1e-7). The smoke test passes on the rebuilt site, including a chained clip. Seam smoothness on the real model is not yet measured, and the model's fidelity to the source frames is unverified. A visual check on the page is the next step.
 
 Walk pace now follows the clip's own pelvis speed, per drawn frame, instead of the fixed `WALK_PACE` constant. The feet can still slide where the wander heading differs from the model's travel direction, and the speed magnitude is unmeasured.
+
+### Root cause of the crouch and the float, found by running the component
+
+Headless runs of the real component (`scripts/diagnose-chain.mjs`) found two causes that the earlier reading had missed:
+
+- **The standing source was underground.** The neutral skeleton is pelvis-centred (pelvis y = 0, feet at −0.79 m), and the standing defaults used those heights as they were. A figure whose feet sit 0.79 m below the floor makes the model fold into a crouch: the pelvis-to-foot distance fell from 0.69 m to 0.20 m over one clip. Lifting the standing source by 0.787 m holds the pelvis at 0.80 m, the lowest joint on the floor within 5 mm, and pelvis-to-foot at 0.80 m for the whole clip. The glue now makes that lift.
+- **The render floated the feet.** Each pose was drawn from the pelvis, so the lowest joint moved relative to the shadow line from frame to frame. `drawFrame` now pins each frame's lowest joint to the ground line.
+
+Measured after both fixes: a chained clip reproduces its source to 1.1 cm at the root and in joint positions (before the lift it was 8 cm), 1.9° of heading, and 1.7 mm of root height.
