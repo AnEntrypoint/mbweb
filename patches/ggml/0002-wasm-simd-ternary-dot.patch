@@ -1,0 +1,93 @@
+diff --git a/src/ggml-cpu/arch-fallback.h b/src/ggml-cpu/arch-fallback.h
+index 152e0bac..fb0bc291 100644
+--- a/src/ggml-cpu/arch-fallback.h
++++ b/src/ggml-cpu/arch-fallback.h
+@@ -298,7 +298,6 @@
+ #define ggml_gemm_q8_0_4x8_q8_0_generic ggml_gemm_q8_0_4x8_q8_0
+ #elif defined(__wasm__)
+ // quants.c
+-#define ggml_vec_dot_tq1_0_q8_K_generic ggml_vec_dot_tq1_0_q8_K
+ #define ggml_vec_dot_tq2_0_q8_K_generic ggml_vec_dot_tq2_0_q8_K
+ #define ggml_vec_dot_iq2_xxs_q8_K_generic ggml_vec_dot_iq2_xxs_q8_K
+ #define ggml_vec_dot_iq2_xs_q8_K_generic ggml_vec_dot_iq2_xs_q8_K
+diff --git a/src/ggml-cpu/arch/wasm/quants.c b/src/ggml-cpu/arch/wasm/quants.c
+index 0a7119b4..16f8e6a1 100644
+--- a/src/ggml-cpu/arch/wasm/quants.c
++++ b/src/ggml-cpu/arch/wasm/quants.c
+@@ -1290,3 +1290,76 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
+     ggml_vec_dot_q6_K_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+ #endif
+ }
++
++#if defined __wasm_simd128__
++// Ternary TQ1_0 dot product. Each trit t in {0, 1, 2} stands for -1, 0 or +1 and selects +y, -y or 0 by mask,
++// so the inner loop only adds and subtracts. The decode matches ggml_vec_dot_tq1_0_q8_K_generic lane for lane,
++// and the integer sums are exact, so the results are bit-identical to the generic path.
++static inline void tq1_0_accumulate(v128_t acc[4], v128_t bytes, const int8_t * weights, int16_t pow3) {
++    const v128_t mult = wasm_i16x8_splat(pow3);
++    const v128_t low_byte = wasm_i16x8_splat(0xFF);
++    const v128_t three = wasm_i16x8_splat(3);
++    const v128_t zero = wasm_i16x8_splat(0);
++    const v128_t two = wasm_i16x8_splat(2);
++    const v128_t w = wasm_v128_load(weights);
++    const v128_t wide[2] = { wasm_i16x8_extend_low_i8x16(w), wasm_i16x8_extend_high_i8x16(w) };
++    const v128_t lanes[2] = { wasm_u16x8_extend_low_u8x16(bytes), wasm_u16x8_extend_high_u8x16(bytes) };
++    for (int h = 0; h < 2; ++h) {
++        // The byte times 3^l, truncated to 8 bits; the trit is its top two bits of q * 3.
++        const v128_t q = wasm_v128_and(wasm_i16x8_mul(lanes[h], mult), low_byte);
++        const v128_t trit = wasm_u16x8_shr(wasm_i16x8_mul(q, three), 8);
++        const v128_t plus = wasm_i16x8_eq(trit, two);
++        const v128_t minus = wasm_i16x8_eq(trit, zero);
++        const v128_t term = wasm_i16x8_sub(wasm_v128_and(wide[h], plus), wasm_v128_and(wide[h], minus));
++        acc[2 * h] = wasm_i32x4_add(acc[2 * h], wasm_i32x4_extend_low_i16x8(term));
++        acc[2 * h + 1] = wasm_i32x4_add(acc[2 * h + 1], wasm_i32x4_extend_high_i16x8(term));
++    }
++}
++
++void ggml_vec_dot_tq1_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
++    assert(nrc == 1);
++    UNUSED(nrc);
++    UNUSED(bx);
++    UNUSED(by);
++    UNUSED(bs);
++
++    const block_tq1_0 * GGML_RESTRICT x = vx;
++    const block_q8_K  * GGML_RESTRICT y = vy;
++    const int nb = n / QK_K;
++    static const int16_t pow3[5] = {1, 3, 9, 27, 81};
++
++    float sumf = 0.0f;
++    for (int i = 0; i < nb; ++i) {
++        v128_t acc[4] = { wasm_i32x4_splat(0), wasm_i32x4_splat(0), wasm_i32x4_splat(0), wasm_i32x4_splat(0) };
++        const int8_t * qy = y[i].qs;
++        // Bytes 0..31: five trit planes of 32 weights, read as two 16-byte halves.
++        for (int l = 0; l < 5; ++l) {
++            tq1_0_accumulate(acc, wasm_v128_load(x[i].qs), qy + l * 32, pow3[l]);
++            tq1_0_accumulate(acc, wasm_v128_load(x[i].qs + 16), qy + l * 32 + 16, pow3[l]);
++        }
++        // Bytes 32..47: five trit planes of 16 weights, starting at weight 160.
++        for (int l = 0; l < 5; ++l) {
++            tq1_0_accumulate(acc, wasm_v128_load(x[i].qs + 32), qy + 160 + l * 16, pow3[l]);
++        }
++        int sum = 0;
++        for (int k = 0; k < 4; ++k) {
++            sum += wasm_i32x4_extract_lane(acc[k], 0) + wasm_i32x4_extract_lane(acc[k], 1) +
++                   wasm_i32x4_extract_lane(acc[k], 2) + wasm_i32x4_extract_lane(acc[k], 3);
++        }
++        // The last four qh bytes carry four trits each, with the weights from 240 on.
++        for (int l = 0; l < 4; ++l) {
++            for (size_t j = 0; j < sizeof(x->qh); ++j) {
++                uint8_t q = x[i].qh[j] * pow3[l];
++                uint16_t xi = ((uint16_t) q * 3) >> 8;
++                sum += (xi - 1) * qy[sizeof(x->qs) * 5 + l * sizeof(x->qh) + j];
++            }
++        }
++        sumf += (float) sum * (GGML_CPU_FP16_TO_FP32(x[i].d) * y[i].d);
++    }
++    *s = sumf;
++}
++#else
++void ggml_vec_dot_tq1_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
++    ggml_vec_dot_tq1_0_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
++}
++#endif

@@ -27,6 +27,8 @@ const state = {
     startedAt: 0,
     startFrame: 0,
     generating: false,
+    tail: null, // last generated clip: the source for the next one
+    queue: [], // generated clips waiting to play
     span: null, // one scale for the whole session, set from the first clip
     extent: { maxUp: 0, maxDown: 0, maxSide: 0 }, // largest reach over all clips so far
     blend: null, // the outgoing clip's pelvis-relative pose, eased into the next clip
@@ -61,7 +63,7 @@ worker.onmessage = ({ data }) => {
         state.standing = data.standing;
         els.progress.hidden = true;
         els.generate.disabled = false;
-        generate();
+        fillQueue();
     } else if (data.type === 'motion') {
         const pending = state.pending.get(data.id);
         state.pending.delete(data.id);
@@ -321,14 +323,23 @@ function drawFrame(frame) {
     els.frameLabel.textContent = `Frame ${frame + 1} of ${state.clip.frames} at ${FPS} FPS`;
 }
 
-async function generate() {
+// Clips are generated ahead of playback: each new clip chains from the last generated one, not the one on screen,
+// so the queue can run PREFETCH clips deep and the figure never stops at a boundary waiting for the model.
+const PREFETCH = 2;
+
+function fillQueue() {
+    if (!state.standing || state.generating || state.queue.length >= PREFETCH) return;
+    produce();
+}
+
+async function produce() {
     if (!state.standing || state.generating) return;
     state.generating = true;
     els.generate.disabled = true;
     setStatus('Generating a motion clip', 'generating');
     try {
-        // The source is the previous clip's last frames, placed where that clip ended; the first clip starts from standing.
-        const previous = state.clip;
+        // The source is the last generated clip's last frames, placed where that clip ended; the first clip starts from standing.
+        const previous = state.tail;
         const source = previous
             ? sourceFeatures(previous.values, previous.frames, state.parents, state.neutral)
             : {
@@ -351,30 +362,41 @@ async function generate() {
         const skip = previous ? SOURCE_FRAMES : 0;
         const placed = placeFrames(motion.values, motion.frames, source.origin, source.yaw);
         const clip = prepareClip({ frames: motion.frames - skip, values: placed.subarray(skip * FRAME_VALUES) });
-        // The outgoing pose is captured before the swap so the new clip can ease in from it.
-        const outgoing = state.clip ? pelvisOffsets(state.clip, state.frame) : null;
         if (state.span === null) state.span = clip.span;
         state.extent = {
             maxUp: Math.max(state.extent.maxUp, clip.maxUp),
             maxDown: Math.max(state.extent.maxDown, clip.maxDown),
             maxSide: Math.max(state.extent.maxSide, clip.maxSide),
         };
-        state.clip = clip;
-        state.blend = outgoing;
-        els.scrub.max = String(motion.frames - 1);
-        els.scrub.disabled = false;
-        els.play.disabled = false;
+        state.tail = clip;
+        state.queue.push(clip);
         els.generate.disabled = false;
-        state.frame = 0;
-        drawFrame(0);
-        startPlayback();
-        document.body.dataset.frames = String(clip.frames);
+        if (!state.clip) {
+            advanceClip();
+            drawFrame(0);
+            startPlayback();
+        }
         setStatus(`Generated ${clip.frames} frames`, 'ready');
     } catch (error) {
         fail(`Cannot generate a motion: ${error.message}`);
     } finally {
         state.generating = false;
+        fillQueue();
     }
+}
+
+// Starts the next queued clip. The outgoing pose is captured so the new clip eases in from it. False when none is ready.
+function advanceClip() {
+    const next = state.queue.shift();
+    if (!next) return false;
+    state.blend = state.clip ? pelvisOffsets(state.clip, state.clip.frames - 1) : null;
+    state.clip = next;
+    state.frame = 0;
+    els.scrub.max = String(next.frames - 1);
+    els.scrub.disabled = false;
+    els.play.disabled = false;
+    document.body.dataset.frames = String(next.frames);
+    return true;
 }
 
 function copyOf(array) {
@@ -406,19 +428,28 @@ function tick(now) {
         state.looping = false;
         return;
     }
-    const elapsed = (now - state.startedAt) / 1000;
-    const position = state.startFrame + Math.floor(elapsed * FPS);
-    if (position >= state.clip.frames && !state.generating) {
-        // The clip has played through: the figure keeps walking with the next generated clip.
-        generate();
+    let position = state.startFrame + Math.floor(((now - state.startedAt) / 1000) * FPS);
+    if (position >= state.clip.frames) {
+        const overrun = position - state.clip.frames;
+        if (advanceClip()) {
+            // The next clip plays from its first frame, keeping any time the previous one overran.
+            state.startedAt = now - (overrun * 1000) / FPS;
+            state.startFrame = 0;
+            position = overrun;
+        } else {
+            // Nothing is ready: the last frame holds until the next clip is queued.
+            state.startedAt = now;
+            state.startFrame = state.clip.frames - 1;
+            position = state.clip.frames - 1;
+        }
     }
-    // While the next clip is generated, the last frame holds instead of looping the old clip into a seam.
+    fillQueue();
     const frame = Math.min(position, state.clip.frames - 1);
     if (frame !== state.frame) drawFrame(frame);
     requestAnimationFrame(tick);
 }
 
-els.generate.addEventListener('click', () => generate());
+els.generate.addEventListener('click', () => fillQueue());
 els.canvas.addEventListener('pointermove', (event) => {
     const rect = els.canvas.getBoundingClientRect();
     mouse.x = event.clientX - rect.left;
