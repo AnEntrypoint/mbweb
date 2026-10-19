@@ -50,7 +50,7 @@ let nextThreadWorker = 0;
 async function startThreadPool() {
     const started = [];
     for (let i = 0; i < THREAD_POOL; i++) {
-        const worker = new Worker(threadWorker, { type: 'module' });
+        const worker = new Worker(threadWorker);
         started.push(new Promise((resolve) => {
             worker.onmessage = (event) => {
                 if (event.data?.ready) resolve();

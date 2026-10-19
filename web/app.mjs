@@ -67,7 +67,7 @@ function fail(message) {
     els.scrub.disabled = true;
 }
 
-const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+const worker = new Worker(new URL('./worker.js', import.meta.url));
 
 worker.onmessage = ({ data }) => {
     if (data.type === 'progress') {

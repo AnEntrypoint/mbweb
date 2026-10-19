@@ -16,8 +16,14 @@ mkdir -p "$SITE/component" "$SITE/model"
 
 # jco's default core-module loader has a Node-only branch (node:fs/promises). The page always
 # supplies its own loader, so that branch never runs in the browser and stays external.
-(cd "$ROOT" && npx --no-install esbuild web/app.mjs web/worker.mjs web/threads-worker.mjs \
+(cd "$ROOT" && npx --no-install esbuild web/app.mjs \
     --bundle --format=esm --platform=browser --target=es2022 --minify \
+    --external:node:fs/promises \
+    --outdir="$SITE" --entry-names=[name])
+
+# Workers are classic scripts: the module-worker type is the one WebKit refuses to start in the smoke run.
+(cd "$ROOT" && npx --no-install esbuild web/worker.mjs web/threads-worker.mjs \
+    --bundle --format=iife --platform=browser --target=es2022 --minify \
     --external:node:fs/promises \
     --outdir="$SITE" --entry-names=[name])
 
