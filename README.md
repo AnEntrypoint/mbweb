@@ -28,7 +28,17 @@ Measured results and deliberate deviations are in its [RESULTS.md](docs/prd/moti
 ## Build and test
 
 Requirements: Linux x86-64, Node 22, Rust with `cargo`, Ninja, and clang. The first build downloads
-about 190 MB of wasi-sdk and compiles the GGML core.
+about 190 MB of wasi-sdk and compiles the GGML core. The component build also needs the pinned
+`wit-bindgen` 0.63.0 and `wasm-tools` 1.262.0 on `PATH`. If `CARGO_HOME` is not writable, install them
+into a separate root:
+
+```sh
+cargo install wit-bindgen-cli --version 0.63.0 --locked --root "$HOME/.local/mbweb-tools"
+cargo install wasm-tools --version 1.262.0 --locked --root "$HOME/.local/mbweb-tools"
+export PATH="$HOME/.local/mbweb-tools/bin:$PATH"
+```
+
+The smoke test needs a Chromium on `CHROMIUM_PATH`; Playwright's bundled browser is not installed by `npm ci`.
 
 ```sh
 npm ci

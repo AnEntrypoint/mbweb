@@ -5,7 +5,7 @@ export const JOINTS = 34;
 export const FRAME_VALUES = 3 + JOINTS * 4;
 
 // Hamilton product of two XYZW quaternions.
-function multiply(a, b) {
+export function multiply(a, b) {
     const [ax, ay, az, aw] = a;
     const [bx, by, bz, bw] = b;
     return [
@@ -17,7 +17,7 @@ function multiply(a, b) {
 }
 
 // Rotates a vector by a unit XYZW quaternion: v + w t + q x t with t = 2 (q x v).
-function rotate(q, v) {
+export function rotate(q, v) {
     const [x, y, z, w] = q;
     const tx = 2 * (y * v[2] - z * v[1]);
     const ty = 2 * (z * v[0] - x * v[2]);
@@ -29,9 +29,9 @@ function rotate(q, v) {
     ];
 }
 
-// Writes the world position of every joint for one frame into out[34 * 3].
-// Parents are resolved recursively, so the model's joint order does not matter.
-export function framePositions(values, offset, parents, neutral, out, outOffset) {
+// Writes the world position of every joint for one frame into out[34 * 3], and each joint's global
+// rotation into outRotation[34 * 4] when given. Parents are resolved recursively, so joint order does not matter.
+export function framePositions(values, offset, parents, neutral, out, outOffset, outRotation = null, rotOffset = 0) {
     const globalRotation = new Array(JOINTS);
     const done = new Array(JOINTS).fill(false);
     const localRotation = (joint) => {
@@ -65,6 +65,11 @@ export function framePositions(values, offset, parents, neutral, out, outOffset)
         done[joint] = true;
     };
     for (let joint = 0; joint < JOINTS; joint++) solve(joint);
+    if (outRotation) {
+        for (let joint = 0; joint < JOINTS; joint++) {
+            outRotation.set(globalRotation[joint], rotOffset + joint * 4);
+        }
+    }
 }
 
 // Positions for every frame of a motion: frames * 34 * 3 values.

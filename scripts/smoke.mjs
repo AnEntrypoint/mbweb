@@ -108,7 +108,8 @@ try {
     const generated = await waitForState(page, ['ready', 'error']);
     check(generated === 'ready', `generate reaches ready (${generated})`);
     const secondFrames = Number(await page.getAttribute('body', 'data-frames'));
-    check(secondFrames >= 24 && secondFrames <= 64 && secondFrames % 4 === 0, `second clip has ${secondFrames} frames`);
+    // A chained clip plays its model output without the four source frames it repeats from the last clip.
+    check(secondFrames >= 20 && secondFrames <= 60, `second clip has ${secondFrames} frames after its source frames`);
     await pauseIfPlaying(page);
     await scrubTo(page, 0);
     const clipStart = await canvasPixels(page);

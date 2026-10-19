@@ -1,5 +1,6 @@
 // Page logic: starts the worker, draws the generated clip as a stick figure, and wires the controls.
-import { motionPositions, JOINTS } from './lib/skeleton.mjs';
+import { motionPositions, JOINTS, FRAME_VALUES } from './lib/skeleton.mjs';
+import { SOURCE_FRAMES, placeFrames, sourceFeatures } from './lib/continuity.mjs';
 
 const FPS = 30;
 const els = {
@@ -26,7 +27,6 @@ const state = {
     startedAt: 0,
     startFrame: 0,
     generating: false,
-    steerHeading: null,
     span: null, // one scale for the whole session, set from the first clip
     extent: { maxUp: 0, maxDown: 0, maxSide: 0 }, // largest reach over all clips so far
     blend: null, // the outgoing clip's pelvis-relative pose, eased into the next clip
@@ -129,7 +129,7 @@ function prepareClip(motion) {
             maxSide = Math.max(maxSide, Math.abs(dz));
         }
     }
-    return { frames: motion.frames, positions, minY, span, speed, maxUp, maxDown, maxSide };
+    return { frames: motion.frames, values: motion.values, positions, minY, span, speed, maxUp, maxDown, maxSide };
 }
 
 const wrapUnit = (value) => ((value % 1) + 1) % 1;
@@ -144,9 +144,6 @@ const FIGURE_RADIUS = 36; // clearance kept around obstacles, in pixels
 const LOOK_AHEAD = 70; // how far ahead the figure checks for obstacles
 const MOUSE_RADIUS = 90; // the mouse pushes the figure only when this close to its body
 const TURN_RATE = 1.8; // radians per second when turning toward a destination or away from a block
-// Walking pace across the stage, as a fraction of its smaller side per second. The generated clips carry
-// too little root travel to walk anywhere, so the pace is set here and the feet slide on the ground.
-const WALK_PACE = 0.12;
 const WANDER = 1.1; // how strongly the heading drifts while wandering
 const BLEND_FRAMES = 8; // frames over which a new clip eases in from the outgoing pose
 const FACE_BAND = 0.25; // the figure turns around only once the heading is this far past vertical
@@ -209,7 +206,7 @@ function updateBody(now, width, height, speedPx, playing, bounds) {
         body.heading += (left <= right ? -1 : 1) * TURN_RATE * 2 * dt;
     }
     if (!playing) return;
-    const step = WALK_PACE * Math.min(width, height) * dt;
+    const step = speedPx; // the clip's own pelvis travel since the last drawn frame
     const nx = body.x + Math.cos(body.heading) * step;
     const ny = body.y + Math.sin(body.heading) * step;
     // Stay on the stage: bounce off the edges (kept clear of the figure's height) and turn around.
@@ -325,18 +322,30 @@ async function generate() {
     els.generate.disabled = true;
     setStatus('Generating a motion clip', 'generating');
     try {
-        const { globalRoot, localRoot, pose } = state.standing;
-        const motion = await request(
-            {
-                type: 'infer',
-                globalRoot: steeredGlobalRoot(globalRoot),
-                localRoot: copyOf(localRoot),
-                pose: copyOf(pose),
-                seed: state.seed,
-            },
-        );
+        // The source is the previous clip's last frames, placed where that clip ended; the first clip starts from standing.
+        const previous = state.clip;
+        const source = previous
+            ? sourceFeatures(previous.values, previous.frames, state.parents, state.neutral)
+            : {
+                globalRoot: copyOf(state.standing.globalRoot),
+                localRoot: copyOf(state.standing.localRoot),
+                pose: copyOf(state.standing.pose),
+                origin: { x: 0, z: 0 },
+                yaw: 0,
+            };
+        const motion = await request({
+            type: 'infer',
+            globalRoot: source.globalRoot,
+            localRoot: source.localRoot,
+            pose: source.pose,
+            seed: state.seed,
+            freeTarget: true,
+        });
         state.seed += 1;
-        const clip = prepareClip(motion);
+        // The model's clip starts with the source frames, which repeat the previous clip's last frames: play it after them.
+        const skip = previous ? SOURCE_FRAMES : 0;
+        const placed = placeFrames(motion.values, motion.frames, source.origin, source.yaw);
+        const clip = prepareClip({ frames: motion.frames - skip, values: placed.subarray(skip * FRAME_VALUES) });
         // The outgoing pose is captured before the swap so the new clip can ease in from it.
         const outgoing = state.clip ? pelvisOffsets(state.clip, state.frame) : null;
         if (state.span === null) state.span = clip.span;
@@ -354,8 +363,8 @@ async function generate() {
         state.frame = 0;
         drawFrame(0);
         startPlayback();
-        document.body.dataset.frames = String(motion.frames);
-        setStatus(`Generated ${motion.frames} frames`, 'ready');
+        document.body.dataset.frames = String(clip.frames);
+        setStatus(`Generated ${clip.frames} frames`, 'ready');
     } catch (error) {
         fail(`Cannot generate a motion: ${error.message}`);
     } finally {
@@ -365,19 +374,6 @@ async function generate() {
 
 function copyOf(array) {
     return new Float32Array(array);
-}
-
-// Global root features per slot: x, y, z, heading cos, heading sin. When a heading is set, every slot faces it.
-function steeredGlobalRoot(globalRoot) {
-    const out = copyOf(globalRoot);
-    if (state.steerHeading === null || state.steerHeading === undefined) return out;
-    const cos = Math.cos(state.steerHeading);
-    const sin = Math.sin(state.steerHeading);
-    for (let slot = 0; slot < out.length / 5; slot++) {
-        out[slot * 5 + 3] = cos; // the runtime requires a unit cosine/sine pair, not normalized values
-        out[slot * 5 + 4] = sin;
-    }
-    return out;
 }
 
 

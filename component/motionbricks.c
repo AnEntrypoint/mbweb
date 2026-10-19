@@ -240,9 +240,33 @@ static bool set_feature(mb_inference_request * request, uint32_t field, const mo
     return true;
 }
 
+/* Source slots 0-3 stay enabled; target slots 4-7 are masked off so the model chooses the clip's end.
+ * Local-root slot 3 keeps its library default (disabled), since its outgoing velocity is unknown. */
+static bool mask_target_slots(mb_inference_request * request, motionbricks_string_t * err) {
+    static const struct {
+        uint32_t field;
+        uint32_t mask[8];
+    } masks[] = {
+        {MB_INFERENCE_GLOBAL_ROOT, {1, 1, 1, 1, 0, 0, 0, 0}},
+        {MB_INFERENCE_LOCAL_ROOT, {1, 1, 1, 0, 0, 0, 0, 0}},
+        {MB_INFERENCE_POSE, {1, 1, 1, 1, 0, 0, 0, 0}},
+    };
+    char error[512] = {0};
+    for (size_t i = 0; i < sizeof masks / sizeof masks[0]; ++i) {
+        mb_status status = mb_inference_request_set_mask(request, masks[i].field, masks[i].mask, 8,
+                                                         error, sizeof error);
+        if (status != MB_OK) {
+            set_status_error(err, "mb_inference_request_set_mask", error, status);
+            return false;
+        }
+    }
+    return true;
+}
+
 bool exports_mb_motionbricks_inference_infer(motionbricks_list_f32_t * global_root,
                                              motionbricks_list_f32_t * local_root,
                                              motionbricks_list_f32_t * pose, uint64_t seed,
+                                             bool free_target,
                                              exports_mb_motionbricks_inference_motion_t * ret,
                                              motionbricks_string_t * err) {
     char error[512] = {0};
@@ -258,7 +282,8 @@ bool exports_mb_motionbricks_inference_infer(motionbricks_list_f32_t * global_ro
     }
     if (!set_feature(request, MB_INFERENCE_GLOBAL_ROOT, global_root, GLOBAL_ROOT_VALUES, err) ||
         !set_feature(request, MB_INFERENCE_LOCAL_ROOT, local_root, LOCAL_ROOT_VALUES, err) ||
-        !set_feature(request, MB_INFERENCE_POSE, pose, POSE_VALUES, err)) {
+        !set_feature(request, MB_INFERENCE_POSE, pose, POSE_VALUES, err) ||
+        (free_target && !mask_target_slots(request, err))) {
         mb_inference_request_free(request);
         return false;
     }

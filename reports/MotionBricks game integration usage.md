@@ -64,3 +64,18 @@ Fixes 2, 6, and 8 depend on fix 1, since the notes never establish how the upstr
 ## Conclusion
 
 The page treats each MotionBricks clip as a standalone image, and the upstream contract treats generation as a continuous stream conditioned on the previous state. Most of the artifacts follow from that mismatch, which means the model is probably not the first place to look. The notes leave three things unsettled: how the upstream demo applies root travel, whether slots 4-7 constrain the output, and how large each suspected magnitude is on screen. A measurement pass answers all three before any rendering change, and the screen-y coupling is the one finding that was not in the local audit and can be fixed without knowing any of them.
+
+## Update: the upstream demo and the chained-clip change
+
+The upstream G1 demo (`motionbricks/scripts/interactive_demo_g1.py`) was read after the first pass. It runs a streaming loop: each step takes `get_next_frame()` and writes the model's own qpos into the simulated robot, feeds the robot's current qpos back as context (`use_qpos=1`), and calls `generate_new_frames` again. Root height and travel are never discarded. Continuity comes from the model's own previous output, not from a standing reset.
+
+The inference contract (`docs/API-INFERENCE.md`) allows the same thing per clip. Boundary 0 takes four source frames, and the output starts with them. The page filled both boundaries with the standing pose, which is why clips began and ended at rest.
+
+The change in this update:
+- The next clip's source is the previous clip's last four frames, canonicalised about the first source root (origin X/Z, yaw zero), as the API doc prescribes. The output is placed back into the session frame with the same transform, so the clip continues from where the last one ended.
+- Target slots 4-7 are masked off (`free-target`, in the WIT and the glue), so clips no longer have to end standing. The masks follow the API doc: source slots enabled, local-root slot 3 disabled.
+- The chained clip plays from its fifth frame, since its first four repeat the previous clip's last four.
+
+Verification: the coordinate math passes a Node check against a synthetic skeleton (canonical pose rows match forward kinematics, the orientation columns match, and the transform round-trips to about 1e-7). The smoke test passes on the rebuilt site, including a chained clip. Seam smoothness on the real model is not yet measured, and the model's fidelity to the source frames is unverified. A visual check on the page is the next step.
+
+Walk pace now follows the clip's own pelvis speed, per drawn frame, instead of the fixed `WALK_PACE` constant. The feet can still slide where the wander heading differs from the model's travel direction, and the speed magnitude is unmeasured.

@@ -49,6 +49,7 @@ self.onmessage = async ({ data }) => {
                 new Float32Array(data.localRoot),
                 new Float32Array(data.pose),
                 BigInt(data.seed),
+                Boolean(data.freeTarget),
             );
             const values = copy(motion.values);
             self.postMessage({ type: 'motion', id: data.id, frames: motion.frames, values }, [values.buffer]);

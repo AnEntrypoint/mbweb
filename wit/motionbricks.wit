@@ -37,12 +37,14 @@ interface inference {
     /// Canonical standing inputs: (global-root 40, local-root 32, pose 2424).
     standing-features: func() -> result<tuple<list<f32>, list<f32>, list<f32>>, string>;
 
-    /// One stateless inference call. Returns the frames of the clip.
+    /// One stateless inference call. Returns the frames of the clip. With free-target, the four target
+    /// slots are masked off so the model chooses where the clip ends; the source slots stay enabled.
     infer: func(
         global-root: list<f32>,
         local-root: list<f32>,
         pose: list<f32>,
         seed: u64,
+        free-target: bool,
     ) -> result<motion, string>;
 }
 
