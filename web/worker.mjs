@@ -69,7 +69,8 @@ function launchThread(message) {
 
 // Styles and agents: the game path. Every style is a verified .mbstyle asset staged into the same bundle as the weights.
 const styles = new Map();
-let agent = 0;
+let standingHeight = 0.787;
+let agentReady = false;
 
 function stageFiles(x, files) {
     const encoder = new TextEncoder();
@@ -105,16 +106,29 @@ async function loadAgent(styleFiles) {
         if (handle === 0) throw threadedError(`style ${name}`);
         styles.set(name.replace(/\.mbstyle$/, ''), handle);
     }
-    agent = x.mb_agent_new();
-    if (agent === 0) throw threadedError('agent');
-    const walk = styles.get('walk');
-    if (x.mb_agent_reset(agent, walk) !== 0) throw threadedError('agent reset');
-    // The agent starts from four standing frames: the standing root height, identity joint rotations.
+    // Standing root height: the context a plan starts from when there is no motion yet.
     const [globalRoot] = await standingThreaded();
-    const roots = new Float32Array(4 * 3);
-    for (let frame = 0; frame < 4; frame++) roots[frame * 3 + 1] = globalRoot[1];
+    standingHeight = globalRoot[1];
+}
+
+// One planned motion, the way the upstream streaming server plans it: a fresh agent is seeded with four frames of
+// context (the reference at the seam, or standing at the start), then plans from the command.
+function planThreaded({ style, direction, speed, target, seed, context }) {
+    const x = threaded.exports;
+    const handle = styles.get(style);
+    const heading = direction > 0 ? 0 : Math.PI;
+    const hasTarget = target ? 1 : 0;
+    const roots = new Float32Array(12);
     const rotations = new Float32Array(4 * 34 * 4);
-    for (let joint = 0; joint < 4 * 34; joint++) rotations[joint * 4 + 3] = 1;
+    if (context) {
+        roots.set(context.roots);
+        rotations.set(context.rotations);
+    } else {
+        for (let frame = 0; frame < 4; frame++) roots[frame * 3 + 1] = standingHeight;
+        for (let joint = 0; joint < 4 * 34; joint++) rotations[joint * 4 + 3] = 1;
+    }
+    const agent = x.mb_agent_new();
+    if (agent === 0) throw threadedError('agent');
     const rootPtr = x.mb_alloc(roots.byteLength);
     const rotationPtr = x.mb_alloc(rotations.byteLength);
     new Float32Array(threaded.memory.buffer, rootPtr, roots.length).set(roots);
@@ -122,26 +136,19 @@ async function loadAgent(styleFiles) {
     if (x.mb_agent_context(agent, rootPtr, rotationPtr, 4) !== 0) throw threadedError('agent context');
     x.mb_free(rootPtr);
     x.mb_free(rotationPtr);
-}
-
-// One planned motion: the command's movement, facing, speed and world target; the agent then advances over it.
-function planThreaded({ style, direction, speed, target, seed }) {
-    const x = threaded.exports;
-    const handle = styles.get(style);
-    const heading = direction > 0 ? 0 : Math.PI;
-    const hasTarget = target ? 1 : 0;
     const command = x.mb_command_new(handle, 0, 0, direction, 0, 0, direction, speed, hasTarget,
                                      0, 0.787, target ? target.z : 0, heading, BigInt(seed));
     const framesPtr = x.mb_alloc(4);
-    const rootsPtr = x.mb_alloc(4);
-    const rotationsPtr = x.mb_alloc(4);
-    const status = x.mbx_agent_plan(agent, command, framesPtr, rootsPtr, rotationsPtr);
+    const outRootsPtr = x.mb_alloc(4);
+    const outRotationsPtr = x.mb_alloc(4);
+    const status = x.mbx_agent_plan(agent, command, framesPtr, outRootsPtr, outRotationsPtr);
     x.mb_command_free_handle(command);
+    x.mb_agent_free(agent);
     if (status !== 0) throw threadedError('plan');
     const view = new DataView(threaded.memory.buffer);
     const frames = view.getUint32(framesPtr, true);
-    const rootsAt = view.getUint32(rootsPtr, true);
-    const rotationsAt = view.getUint32(rotationsPtr, true);
+    const rootsAt = view.getUint32(outRootsPtr, true);
+    const rotationsAt = view.getUint32(outRotationsPtr, true);
     const values = new Float32Array(frames * 139);
     for (let frame = 0; frame < frames; frame++) {
         values.set(new Float32Array(threaded.memory.buffer, rootsAt + frame * 12, 3), frame * 139);
@@ -149,8 +156,7 @@ function planThreaded({ style, direction, speed, target, seed }) {
     }
     x.mb_free(rootsAt);
     x.mb_free(rotationsAt);
-    for (const pointer of [framesPtr, rootsPtr, rotationsPtr]) x.mb_free(pointer);
-    x.mbx_agent_advance(agent, frames);
+    for (const pointer of [framesPtr, outRootsPtr, outRotationsPtr]) x.mb_free(pointer);
     return { frames, values };
 }
 
@@ -265,7 +271,8 @@ self.onmessage = async ({ data }) => {
                 const [globalRoot, localRoot, pose] = await inference.standingFeatures();
                 standing = { globalRoot: copy(globalRoot), localRoot: copy(localRoot), pose: copy(pose) };
             }
-            self.postMessage({ type: 'ready', parents, neutral, standing, agent: agent !== 0 });
+            agentReady = styles.size > 0;
+            self.postMessage({ type: 'ready', parents, neutral, standing, agent: agentReady });
         } else if (data.type === 'plan') {
             const { frames, values } = planThreaded(data);
             self.postMessage({ type: 'motion', id: data.id, frames, values }, [values.buffer]);

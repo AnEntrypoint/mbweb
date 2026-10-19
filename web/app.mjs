@@ -45,12 +45,19 @@ const state = {
     generating: false,
     tail: null, // last generated clip: the source for the next one
     queue: [], // generated clips waiting to play
+    failed: false,
     agent: false, // the threaded core's agent is ready: plan motion with commands instead of inference
+    started: false,
     clipCount: 0, // clips started so far; mirrored to body[data-clip] for the smoke test
     span: null, // one scale for the whole session, set from the first clip
     extent: { maxUp: 0, maxDown: 0, maxSide: 0 }, // largest reach over all clips so far
     blend: null, // the outgoing clip's pelvis-relative pose, eased into the next clip
     looping: false,
+    ref: null, // the reference: one continuous timeline of the motion being played ({ values, frames })
+    playhead: 0, // position on the reference, in frames
+    planning: false, // a plan is in flight
+    lookahead: 48, // frames ahead of the playhead where the next plan's seam is placed
+    lastTick: 0,
     walkDir: 1, // direction of the walk along the session's forward axis: +1 or -1
     legEnd: null, // where the current leg of the walk ends, in metres along the session's forward axis
     goalPx: null, // a clicked point on the stage in pixels, until the figure reaches it
@@ -62,6 +69,7 @@ function setStatus(text, stateName) {
 }
 
 function fail(message) {
+    state.failed = true;
     setStatus(message, 'error');
     els.play.disabled = true;
     els.scrub.disabled = true;
@@ -314,6 +322,10 @@ const WALK_DISTANCE = 1.5; // metres each clip walks ahead
 const PREFETCH = 1; // one clip ahead: the next clip generates while the current one plays
 
 function fillQueue() {
+    if (state.agent) {
+        planAhead();
+        return;
+    }
     if (!state.standing || state.generating || state.queue.length >= PREFETCH) return;
     produce();
 }
@@ -342,24 +354,6 @@ async function produce() {
     // Only the first clip is awaited on screen; later clips are prefetched while the current one plays.
     if (!state.clip) setStatus('Generating a motion clip', 'generating');
     try {
-        if (state.agent) {
-            // The game path: the upstream agent plans from a command (walk one way, the leg's world target) and advances
-            // over what it generated, so each plan continues the one before it.
-            const walk = chooseWalk();
-            const motion = await request({
-                type: 'plan',
-                style: 'walk',
-                direction: walk.direction,
-                speed: -1,
-                target: walk.nearStop ? { z: state.legEnd } : null,
-                seed: state.seed,
-            });
-            state.seed += 1;
-            // The agent's plan repeats the previous plan's last frame as its first: skip it so the figure keeps moving.
-            const skip = state.tail ? 1 : 0;
-            enqueue(prepareClip({ frames: motion.frames - skip, values: motion.values.subarray(skip * FRAME_VALUES) }));
-            return;
-        }
         // The source is the last generated clip's last frames, placed where that clip ended; the first clip starts from standing.
         const previous = state.tail;
         const source = previous
@@ -421,6 +415,7 @@ function copyOf(array) {
 
 function startPlayback() {
     state.playing = true;
+    state.lastTick = 0;
     state.startedAt = performance.now();
     state.startFrame = state.frame;
     els.play.textContent = 'Pause';
@@ -438,7 +433,133 @@ function stopPlayback() {
     els.play.setAttribute('aria-pressed', 'false');
 }
 
+// The reference is the motion being played, one continuous timeline. Playback never holds: the playhead moves on the
+// reference, and a plan is requested whenever fewer than PLAN_BELOW frames remain ahead of it. As the upstream
+// streaming server does, a plan is placed at a seam ahead of the playhead, seeded with the four reference frames at
+// the seam, and its first frames are blended into the reference.
+const PLAN_BELOW = 80; // frames of reference left ahead of the playhead that trigger the next plan
+const TRANSITION_FRAMES = 8; // frames over which a plan is blended into the reference at its seam
+const START_FRAMES = 80; // playback starts once the reference holds this many frames, so the next plan has room to arrive
+
+function contextAt(seam) {
+    const { values } = state.ref;
+    const roots = new Float32Array(12);
+    const rotations = new Float32Array(4 * 136);
+    for (let i = 0; i < 4; i++) {
+        const base = (seam + i) * FRAME_VALUES;
+        roots.set(values.subarray(base, base + 3), i * 3);
+        rotations.set(values.subarray(base + 3, base + FRAME_VALUES), i * 136);
+    }
+    return { roots, rotations };
+}
+
+async function planAhead() {
+    if (state.planning) return;
+    state.planning = true;
+    try {
+        const ref = state.ref;
+        const seam = ref ? Math.min(Math.floor(state.playhead) + state.lookahead, ref.frames - 4) : 0;
+        const walk = chooseWalk();
+        const motion = await request({
+            type: 'plan',
+            style: 'walk',
+            direction: walk.direction,
+            speed: -1,
+            target: walk.nearStop ? { z: state.legEnd } : null,
+            seed: state.seed,
+            context: ref ? contextAt(seam) : null,
+        });
+        state.seed += 1;
+        // A plan that arrives after the playhead has passed its seam is discarded; the next one starts further ahead.
+        if (ref && seam <= state.playhead) {
+            state.lookahead += 8;
+            return;
+        }
+        mergePlan(seam, motion);
+    } catch (error) {
+        fail(`Cannot generate a motion: ${error.message}`);
+    } finally {
+        state.planning = false;
+    }
+    // Before playback starts nothing ticks, so keep planning until the reference is long enough.
+    if (!state.started && state.ref && !state.failed) planAhead();
+}
+
+// Places a plan on the reference at its seam. The plan's first frames are eased in from the reference they replace.
+function mergePlan(seam, motion) {
+    const old = state.ref;
+    const n = motion.frames;
+    const total = seam + n;
+    const values = new Float32Array(total * FRAME_VALUES);
+    if (old) values.set(old.values.subarray(0, seam * FRAME_VALUES));
+    values.set(motion.values, seam * FRAME_VALUES);
+    if (old) {
+        const blend = Math.min(TRANSITION_FRAMES, n, old.frames - seam);
+        for (let i = 0; i < blend; i++) {
+            const at = (seam + i) * FRAME_VALUES;
+            const u = i / (TRANSITION_FRAMES - 1);
+            const eased = u * u * (3 - 2 * u);
+            for (let k = 0; k < 3; k++) values[at + k] = old.values[at + k] + eased * (values[at + k] - old.values[at + k]);
+            for (let joint = 0; joint < 34; joint++) {
+                const q = at + 3 + joint * 4;
+                let dot = 0;
+                for (let k = 0; k < 4; k++) dot += old.values[q + k] * values[q + k];
+                const sign = dot < 0 ? -1 : 1;
+                const out = [0, 0, 0, 0];
+                let norm = 0;
+                for (let k = 0; k < 4; k++) {
+                    out[k] = (1 - eased) * old.values[q + k] + eased * sign * values[q + k];
+                    norm += out[k] * out[k];
+                }
+                norm = Math.sqrt(norm) || 1;
+                for (let k = 0; k < 4; k++) values[q + k] = out[k] / norm;
+            }
+        }
+    }
+    state.ref = { values, frames: total };
+    state.tail = state.ref;
+    state.clip = prepareClip({ frames: total, values });
+    if (state.span === null) state.span = state.clip.span;
+    state.extent = {
+        maxUp: Math.max(state.extent.maxUp, state.clip.maxUp),
+        maxDown: Math.max(state.extent.maxDown, state.clip.maxDown),
+        maxSide: Math.max(state.extent.maxSide, state.clip.maxSide),
+    };
+    els.scrub.max = String(total - 1);
+    els.scrub.disabled = false;
+    els.play.disabled = false;
+    state.clipCount += 1;
+    document.body.dataset.clip = String(state.clipCount);
+    document.body.dataset.frames = String(n);
+    if (!state.started && total >= START_FRAMES) {
+        state.started = true;
+        state.playhead = 0;
+        drawFrame(0);
+        startPlayback();
+    }
+    setStatus(`Generated ${n} frames`, 'ready');
+}
+
+function tickAgent(now) {
+    if (!state.playing) {
+        state.looping = false;
+        state.lastTick = 0;
+        return;
+    }
+    const dt = state.lastTick ? Math.min(0.1, (now - state.lastTick) / 1000) : 0;
+    state.lastTick = now;
+    state.playhead = Math.min(state.playhead + dt * FPS, state.ref.frames - 1);
+    if (state.ref.frames - state.playhead < PLAN_BELOW) planAhead();
+    const frame = Math.floor(state.playhead);
+    if (frame !== state.frame) drawFrame(frame);
+    requestAnimationFrame(tick);
+}
+
 function tick(now) {
+    if (state.agent && state.ref) {
+        tickAgent(now);
+        return;
+    }
     if (!state.playing || !state.clip) {
         state.looping = false;
         return;
