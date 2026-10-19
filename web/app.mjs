@@ -45,6 +45,7 @@ const state = {
     generating: false,
     tail: null, // last generated clip: the source for the next one
     queue: [], // generated clips waiting to play
+    agent: false, // the threaded core's agent is ready: plan motion with commands instead of inference
     clipCount: 0, // clips started so far; mirrored to body[data-clip] for the smoke test
     span: null, // one scale for the whole session, set from the first clip
     extent: { maxUp: 0, maxDown: 0, maxSide: 0 }, // largest reach over all clips so far
@@ -80,6 +81,7 @@ worker.onmessage = ({ data }) => {
         state.parents = data.parents;
         state.neutral = data.neutral;
         state.standing = data.standing;
+        state.agent = data.agent === true;
         els.progress.hidden = true;
         fillQueue();
     } else if (data.type === 'motion') {
@@ -160,12 +162,12 @@ const wrapAngle = (angle) => Math.atan2(Math.sin(angle), Math.cos(angle));
 const FLOOR_FRACTION = 0.8; // floor height as a share of the stage height
 const FIGURE_FRACTION = 0.4; // the figure is held at this share of the stage width
 const WORLD_BLOCKS = [ // metres along the walk in the session frame: start, width, height
-    { z: 4.0, w: 0.5, h: 0.45 },
-    { z: 9.0, w: 0.5, h: 0.35 },
-    { z: 14.0, w: 0.5, h: 0.5 },
+    { z: 8.0, w: 0.5, h: 0.45 },
+    { z: 16.0, w: 0.5, h: 0.35 },
+    { z: 24.0, w: 0.5, h: 0.5 },
 ];
-const WORLD_LIMITS = { min: -3.0, max: 17.0 }; // metres: the walk turns round at these
-const LEG_METRES = 6; // the figure walks one way for up to this far before coming back
+const WORLD_LIMITS = { min: -2.0, max: 30.0 }; // metres: the walk turns round at these
+const LEG_METRES = 40; // a leg runs until a block or a limit: the figure changes direction only there
 const FIGURE_HALF = 0.3; // metres from the pelvis to the figure's front or back
 const BLEND_FRAMES = 8; // frames over which a new clip eases in from the outgoing pose
 
@@ -315,12 +317,46 @@ function fillQueue() {
     produce();
 }
 
+// Queues a generated clip; the first clip starts playback.
+function enqueue(clip) {
+    if (state.span === null) state.span = clip.span;
+    state.extent = {
+        maxUp: Math.max(state.extent.maxUp, clip.maxUp),
+        maxDown: Math.max(state.extent.maxDown, clip.maxDown),
+        maxSide: Math.max(state.extent.maxSide, clip.maxSide),
+    };
+    state.tail = clip;
+    state.queue.push(clip);
+    if (!state.clip) {
+        advanceClip();
+        drawFrame(0);
+        startPlayback();
+    }
+    setStatus(`Generated ${clip.frames} frames`, 'ready');
+}
+
 async function produce() {
     if (!state.standing || state.generating) return;
     state.generating = true;
     // Only the first clip is awaited on screen; later clips are prefetched while the current one plays.
     if (!state.clip) setStatus('Generating a motion clip', 'generating');
     try {
+        if (state.agent) {
+            // The game path: the upstream agent plans from a command (walk one way, the leg's world target) and advances
+            // over what it generated, so each plan continues the one before it.
+            const walk = chooseWalk();
+            const motion = await request({
+                type: 'plan',
+                style: 'walk',
+                direction: walk.direction,
+                speed: -1,
+                target: state.legEnd === null ? null : { z: state.legEnd },
+                seed: state.seed,
+            });
+            state.seed += 1;
+            enqueue(prepareClip({ frames: motion.frames, values: motion.values }));
+            return;
+        }
         // The source is the last generated clip's last frames, placed where that clip ended; the first clip starts from standing.
         const previous = state.tail;
         const source = previous
@@ -350,20 +386,7 @@ async function produce() {
         const skip = previous ? SOURCE_FRAMES : 0;
         const placed = placeFrames(motion.values, motion.frames, source.origin, source.yaw);
         const clip = prepareClip({ frames: motion.frames - skip, values: placed.subarray(skip * FRAME_VALUES) });
-        if (state.span === null) state.span = clip.span;
-        state.extent = {
-            maxUp: Math.max(state.extent.maxUp, clip.maxUp),
-            maxDown: Math.max(state.extent.maxDown, clip.maxDown),
-            maxSide: Math.max(state.extent.maxSide, clip.maxSide),
-        };
-        state.tail = clip;
-        state.queue.push(clip);
-        if (!state.clip) {
-            advanceClip();
-            drawFrame(0);
-            startPlayback();
-        }
-        setStatus(`Generated ${clip.frames} frames`, 'ready');
+        enqueue(clip);
     } catch (error) {
         fail(`Cannot generate a motion: ${error.message}`);
     } finally {
@@ -462,4 +485,6 @@ setStatus('Starting', 'loading');
 const manifestUrl = new URL('./model/ternary/manifest.json', location.href);
 const manifest = await (await fetch(manifestUrl)).json();
 manifest.base_url = new URL(manifest.base_url, manifestUrl).href;
-worker.postMessage({ type: 'init', manifest });
+const styleManifestUrl = new URL('./model/styles/manifest.json', location.href);
+const styleManifest = await (await fetch(styleManifestUrl)).json();
+worker.postMessage({ type: 'init', manifest, styleManifest });

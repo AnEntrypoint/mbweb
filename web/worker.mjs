@@ -59,13 +59,11 @@ function launchThread(message) {
     nextThreadWorker++;
 }
 
-async function loadThreaded(files) {
-    self.postMessage({ type: 'stage', text: 'Loading the model into the threaded core' });
-    const threads = Math.max(1, Math.min(8, navigator.hardwareConcurrency || 4));
-    await startThreadPool();
-    const bytes = await (await fetch(threadedModule)).arrayBuffer();
-    threaded = await loadThreadedCore(bytes, { launch: launchThread, log: (fd, text) => console.log(text) });
-    const x = threaded.exports;
+// Styles and agents: the game path. Every style is a verified .mbstyle asset staged into the same bundle as the weights.
+const styles = new Map();
+let agent = 0;
+
+function stageFiles(x, files) {
     const encoder = new TextEncoder();
     for (const name of Object.keys(files)) {
         const nameBytes = encoder.encode(`${name}\0`);
@@ -85,7 +83,82 @@ async function loadThreaded(files) {
         x.mb_free(namePtr);
         delete files[name];
     }
+}
+
+async function loadAgent(styleFiles) {
+    const x = threaded.exports;
+    const names = Object.keys(styleFiles);
+    stageFiles(x, styleFiles);
+    for (const name of names) {
+        const namePtr = x.mb_alloc(name.length + 1);
+        new Uint8Array(threaded.memory.buffer).set(new TextEncoder().encode(`${name}\0`), namePtr);
+        const handle = x.mbx_style_load(namePtr);
+        x.mb_free(namePtr);
+        if (handle === 0) throw threadedError(`style ${name}`);
+        styles.set(name.replace(/\.mbstyle$/, ''), handle);
+    }
+    agent = x.mb_agent_new();
+    if (agent === 0) throw threadedError('agent');
+    const walk = styles.get('walk');
+    if (x.mb_agent_reset(agent, walk) !== 0) throw threadedError('agent reset');
+    // The agent starts from four standing frames: the standing root height, identity joint rotations.
+    const [globalRoot] = await standingThreaded();
+    const roots = new Float32Array(4 * 3);
+    for (let frame = 0; frame < 4; frame++) roots[frame * 3 + 1] = globalRoot[1];
+    const rotations = new Float32Array(4 * 34 * 4);
+    for (let joint = 0; joint < 4 * 34; joint++) rotations[joint * 4 + 3] = 1;
+    const rootPtr = x.mb_alloc(roots.byteLength);
+    const rotationPtr = x.mb_alloc(rotations.byteLength);
+    new Float32Array(threaded.memory.buffer, rootPtr, roots.length).set(roots);
+    new Float32Array(threaded.memory.buffer, rotationPtr, rotations.length).set(rotations);
+    if (x.mb_agent_context(agent, rootPtr, rotationPtr, 4) !== 0) throw threadedError('agent context');
+    x.mb_free(rootPtr);
+    x.mb_free(rotationPtr);
+}
+
+// One planned motion: the command's movement, facing, speed and world target; the agent then advances over it.
+function planThreaded({ style, direction, speed, target, seed }) {
+    const x = threaded.exports;
+    const handle = styles.get(style);
+    const heading = direction > 0 ? 0 : Math.PI;
+    const hasTarget = target ? 1 : 0;
+    const command = x.mb_command_new(handle, 0, 0, direction, 0, 0, direction, speed, hasTarget,
+                                     0, 0.787, target ? target.z : 0, heading, BigInt(seed));
+    const framesPtr = x.mb_alloc(4);
+    const rootsPtr = x.mb_alloc(4);
+    const rotationsPtr = x.mb_alloc(4);
+    const status = x.mbx_agent_plan(agent, command, framesPtr, rootsPtr, rotationsPtr);
+    x.mb_command_free_handle(command);
+    if (status !== 0) throw threadedError('plan');
+    const view = new DataView(threaded.memory.buffer);
+    const frames = view.getUint32(framesPtr, true);
+    const rootsAt = view.getUint32(rootsPtr, true);
+    const rotationsAt = view.getUint32(rotationsPtr, true);
+    const values = new Float32Array(frames * 139);
+    for (let frame = 0; frame < frames; frame++) {
+        values.set(new Float32Array(threaded.memory.buffer, rootsAt + frame * 12, 3), frame * 139);
+        values.set(new Float32Array(threaded.memory.buffer, rotationsAt + frame * 136 * 4, 136), frame * 139 + 3);
+    }
+    x.mb_free(rootsAt);
+    x.mb_free(rotationsAt);
+    for (const pointer of [framesPtr, rootsPtr, rotationsPtr]) x.mb_free(pointer);
+    x.mbx_agent_advance(agent, frames);
+    return { frames, values };
+}
+
+async function loadThreaded(files, styleFiles) {
+    self.postMessage({ type: 'stage', text: 'Loading the model into the threaded core' });
+    const threads = Math.max(1, Math.min(8, navigator.hardwareConcurrency || 4));
+    await startThreadPool();
+    const bytes = await (await fetch(threadedModule)).arrayBuffer();
+    threaded = await loadThreadedCore(bytes, { launch: launchThread, log: (fd, text) => console.log(text) });
+    const x = threaded.exports;
+    stageFiles(x, files);
     if (x.mb_load(threads) !== 0) throw threadedError('load');
+    if (styleFiles) {
+        self.postMessage({ type: 'stage', text: 'Loading the styles' });
+        await loadAgent(styleFiles);
+    }
 }
 
 function threadedError(what) {
@@ -97,11 +170,12 @@ function threadedError(what) {
     return new Error(`${what}: ${text}`);
 }
 
-async function loadModel(manifest) {
+async function loadModel(manifest, styleManifest) {
     const files = await fetchModel(manifest, onProgressFor());
     const isolated = self.crossOriginIsolated === true && typeof SharedArrayBuffer !== 'undefined';
     if (isolated) {
-        await loadThreaded(files);
+        const styleFiles = styleManifest ? await fetchModel(styleManifest, onProgressFor()) : null;
+        await loadThreaded(files, styleFiles);
     } else {
         await loadComponent(files);
     }
@@ -171,7 +245,7 @@ async function jointGeometry() {
 self.onmessage = async ({ data }) => {
     try {
         if (data.type === 'init') {
-            await loadModel(data.manifest);
+            await loadModel(data.manifest, data.styleManifest);
             let parents, neutral, standing;
             if (threaded) {
                 ({ parents, neutral } = await jointGeometry());
@@ -183,7 +257,10 @@ self.onmessage = async ({ data }) => {
                 const [globalRoot, localRoot, pose] = await inference.standingFeatures();
                 standing = { globalRoot: copy(globalRoot), localRoot: copy(localRoot), pose: copy(pose) };
             }
-            self.postMessage({ type: 'ready', parents, neutral, standing });
+            self.postMessage({ type: 'ready', parents, neutral, standing, agent: agent !== 0 });
+        } else if (data.type === 'plan') {
+            const { frames, values } = planThreaded(data);
+            self.postMessage({ type: 'motion', id: data.id, frames, values }, [values.buffer]);
         } else if (data.type === 'infer') {
             const request = {
                 globalRoot: new Float32Array(data.globalRoot),

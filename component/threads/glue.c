@@ -199,3 +199,108 @@ int32_t mb_profile(char * out, uint32_t capacity) {
     }
     return at;
 }
+
+/* Agents: the upstream game path. A style is an .mbstyle asset loaded from the staged bundle; an agent plans motion
+ * from a command (movement, facing, speed, world target) and advances over what it generated. */
+#define MB_STYLE_PATH_MAX 96
+
+__attribute__((export_name("mbx_style_load")))
+uint32_t mbx_style_load(const char * name) {
+    char path[MB_STYLE_PATH_MAX];
+    snprintf(path, sizeof path, "/style/%s", name);
+    mb_style * style = NULL;
+    if (mb_style_load(g_model, path, &style, g_error, sizeof g_error) != MB_OK) return 0U;
+    return (uint32_t)(uintptr_t)style;
+}
+
+__attribute__((export_name("mb_style_speed")))
+float mb_style_speed(uint32_t style_handle) {
+    float speed = 0.0f;
+    mb_style_get_speed((const mb_style *)(uintptr_t)style_handle, &speed, g_error, sizeof g_error);
+    return speed;
+}
+
+__attribute__((export_name("mb_agent_new")))
+uint32_t mb_agent_new(void) {
+    mb_agent * agent = NULL;
+    if (mb_agent_create(g_model, &agent, g_error, sizeof g_error) != MB_OK) return 0U;
+    return (uint32_t)(uintptr_t)agent;
+}
+
+__attribute__((export_name("mb_agent_reset")))
+int32_t mb_agent_reset_style(uint32_t agent_handle, uint32_t style_handle) {
+    return mb_agent_reset((mb_agent *)(uintptr_t)agent_handle, (const mb_style *)(uintptr_t)style_handle,
+                          g_error, sizeof g_error) == MB_OK ? 0 : -1;
+}
+
+/* roots: frames x 3, rotations: frames x 34 x 4 (local XYZW). The agent takes these as its recent frames. */
+__attribute__((export_name("mb_agent_context")))
+int32_t mb_agent_context(uint32_t agent_handle, const float * roots, const float * rotations, uint32_t frames) {
+    return mb_agent_set_context((mb_agent *)(uintptr_t)agent_handle, roots, rotations, frames, JOINTS,
+                                g_error, sizeof g_error) == MB_OK ? 0 : -1;
+}
+
+/* One command: movement and facing directions, a target speed (negative: the style's speed), an optional world
+ * target with heading, and the seed. Returns a handle the caller frees with mb_command_free_handle. */
+__attribute__((export_name("mb_command_new")))
+uint32_t mb_command_new(uint32_t style_handle, float mx, float my, float mz, float fx, float fy, float fz,
+                        float speed, uint32_t has_target, float tx, float ty, float tz, float heading,
+                        uint64_t seed) {
+    mb_command * command = NULL;
+    if (mb_command_create(&command, g_error, sizeof g_error) != MB_OK) return 0U;
+    if (style_handle != 0U) mb_command_set_style(command, (const mb_style *)(uintptr_t)style_handle, g_error, sizeof g_error);
+    mb_command_set_movement_direction(command, mx, my, mz, g_error, sizeof g_error);
+    mb_command_set_facing_direction(command, fx, fy, fz, g_error, sizeof g_error);
+    mb_command_set_target_speed(command, speed, g_error, sizeof g_error);
+    mb_command_set_world_target(command, tx, ty, tz, heading, has_target, g_error, sizeof g_error);
+    mb_command_set_seed(command, seed, g_error, sizeof g_error);
+    return (uint32_t)(uintptr_t)command;
+}
+
+__attribute__((export_name("mb_command_free_handle")))
+void mb_command_free_handle(uint32_t command_handle) { mb_command_free((mb_command *)(uintptr_t)command_handle); }
+
+/* Plans one motion. Outputs malloc'd buffers: frames x 3 roots and frames x 136 local XYZW rotations. */
+__attribute__((export_name("mbx_agent_plan")))
+int32_t mbx_agent_plan(uint32_t agent_handle, uint32_t command_handle, uint32_t * frames_out,
+                      float ** roots_out, float ** rotations_out) {
+    mb_motion * motion = NULL;
+    if (mb_agent_plan((mb_agent *)(uintptr_t)agent_handle, (const mb_command *)(uintptr_t)command_handle, &motion,
+                      g_error, sizeof g_error) != MB_OK) return -1;
+    uint64_t frames = 0, joints = 0, root_count = 0, rotation_count = 0;
+    const float * roots = NULL;
+    const float * rotations = NULL;
+    if (mb_motion_get_frame_count(motion, &frames, g_error, sizeof g_error) != MB_OK ||
+        mb_motion_get_joint_count(motion, &joints, g_error, sizeof g_error) != MB_OK ||
+        mb_motion_get_root_translations(motion, &roots, &root_count, g_error, sizeof g_error) != MB_OK ||
+        mb_motion_get_local_rotations_xyzw(motion, &rotations, &rotation_count, g_error, sizeof g_error) != MB_OK ||
+        joints != JOINTS || root_count != frames * 3U || rotation_count != frames * JOINTS * 4U) {
+        mb_motion_free(motion);
+        return -1;
+    }
+    float * root_copy = malloc((size_t)root_count * sizeof(float));
+    float * rotation_copy = malloc((size_t)rotation_count * sizeof(float));
+    if (root_copy == NULL || rotation_copy == NULL) {
+        free(root_copy);
+        free(rotation_copy);
+        mb_motion_free(motion);
+        return -1;
+    }
+    memcpy(root_copy, roots, (size_t)root_count * sizeof(float));
+    memcpy(rotation_copy, rotations, (size_t)rotation_count * sizeof(float));
+    mb_motion_free(motion);
+    *frames_out = (uint32_t)frames;
+    *roots_out = root_copy;
+    *rotations_out = rotation_copy;
+    return 0;
+}
+
+__attribute__((export_name("mbx_agent_advance")))
+int32_t mbx_agent_advance(uint32_t agent_handle, uint32_t frames) {
+    return mb_agent_advance((mb_agent *)(uintptr_t)agent_handle, frames, g_error, sizeof g_error) == MB_OK ? 0 : -1;
+}
+
+__attribute__((export_name("mb_agent_free")))
+void mb_agent_free_handle(uint32_t agent_handle) { mb_agent_free((mb_agent *)(uintptr_t)agent_handle); }
+__attribute__((export_name("mb_style_free")))
+void mb_style_free_handle(uint32_t style_handle) { mb_style_free((mb_style *)(uintptr_t)style_handle); }

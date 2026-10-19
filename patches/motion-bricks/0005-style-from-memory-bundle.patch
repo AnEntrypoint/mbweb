@@ -1,0 +1,30 @@
+diff --git a/src/style.cpp b/src/style.cpp
+index a4ebee8..1edfb63 100644
+--- a/src/style.cpp
++++ b/src/style.cpp
+@@ -1,6 +1,7 @@
+ #include "style.hpp"
+ 
+ #include "handles.hpp"
++#include "memory_bundle.hpp"
+ 
+ #include <algorithm>
+ #include <cmath>
+@@ -71,13 +72,15 @@ mb_status load_style_file(const std::filesystem::path & path,
+     reason = "this build has no GGML support";
+     return MB_BACKEND_UNAVAILABLE;
+ #else
+-    if (!std::filesystem::is_regular_file(path)) {
++    const auto * memory = find_memory_file(path);
++    if (memory == nullptr && !std::filesystem::is_regular_file(path)) {
+         reason = "style file does not exist: " + path.string();
+         return MB_IO_ERROR;
+     }
+     ggml_context * raw = nullptr;
+     std::unique_ptr<gguf_context, gguf_deleter> metadata(
+-        gguf_init_from_file(path.string().c_str(), {false, &raw}));
++        memory != nullptr ? gguf_init_from_buffer(memory->data, memory->size, {false, &raw})
++                          : gguf_init_from_file(path.string().c_str(), {false, &raw}));
+     std::unique_ptr<ggml_context, ggml_deleter> tensors(raw);
+     if (!metadata || !tensors || gguf_get_version(metadata.get()) != 3U) {
+         reason = "could not parse style GGUF: " + path.string();

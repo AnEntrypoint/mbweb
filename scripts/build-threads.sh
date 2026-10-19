@@ -50,6 +50,9 @@ CFLAGS=(--target=wasm32-wasip1-threads -O2 -msimd128 -matomics -mbulk-memory -pt
     -Wl,--export-if-defined=mb_stage_begin -Wl,--export-if-defined=mb_stage_write -Wl,--export-if-defined=mb_load \
     -Wl,--export-if-defined=mb_joint_parents -Wl,--export-if-defined=mb_neutral_positions \
     -Wl,--export-if-defined=mb_standing -Wl,--export-if-defined=mb_infer -Wl,--export-if-defined=mb_profile \
+    -Wl,--export-if-defined=mb_style_speed -Wl,--export-if-defined=mb_agent_new -Wl,--export-if-defined=mb_agent_reset_style \
+    -Wl,--export-if-defined=mb_agent_context -Wl,--export-if-defined=mb_command_new -Wl,--export-if-defined=mb_command_free_handle \
+    -Wl,--export-if-defined=mb_agent_free_handle -Wl,--export-if-defined=mb_style_free_handle \
     -Wl,--export-if-defined=wasi_thread_start \
     "$OUT/glue.o" "$OUT/dl-stubs.o" "$CORE/libmotionbricks.a" "$CORE/ggml/src/libggml.a" "$CORE/ggml/src/libggml-cpu.a" \
     "$CORE/ggml/src/libggml-base.a" \

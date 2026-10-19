@@ -1,0 +1,83 @@
+{
+  "repository": "LocalAI-io/MotionBricks-G1-GGML",
+  "revision": "main",
+  "base_url": "https://huggingface.co/LocalAI-io/MotionBricks-G1-GGML/resolve/main/styles/",
+  "format": "mbstyle",
+  "files": [
+    {
+      "path": "elbow_crawling.mbstyle",
+      "bytes": 9408,
+      "sha256": "8ce3e04aa92d91628f10824a2f19a0cc0ba5a9c16008cd95e091b05c9528dc54"
+    },
+    {
+      "path": "hand_crawling.mbstyle",
+      "bytes": 50624,
+      "sha256": "5687f3cd037d7d0942df180727729e04c08d6f0af48b32e9bf793729c5c69fd8"
+    },
+    {
+      "path": "idle.mbstyle",
+      "bytes": 50624,
+      "sha256": "ae800a700d29a8d1082d32c2c82e893aa292c6c18848ffd2c0c67c6f4d64531e"
+    },
+    {
+      "path": "injured_walk.mbstyle",
+      "bytes": 14304,
+      "sha256": "b7b62643281b46ceb0a37fc336f201565b595afda21e93a2cbfc3dda3509a779"
+    },
+    {
+      "path": "slow_walk.mbstyle",
+      "bytes": 50624,
+      "sha256": "9e59ec536d22f61c53b430aecabbef92e694d6ab5caef077ac7d0cfbca6d73f0"
+    },
+    {
+      "path": "stealth_walk.mbstyle",
+      "bytes": 34112,
+      "sha256": "4d2d82e40f9f43c1c15c201b45e30dfb194e4a28cf7fd8a23870394c4589d87a"
+    },
+    {
+      "path": "walk.mbstyle",
+      "bytes": 50624,
+      "sha256": "c1657f56795f26ac22ab944cc6676dd9a7c12e37fc654b08e744a18963597d59"
+    },
+    {
+      "path": "walk_boxing.mbstyle",
+      "bytes": 17664,
+      "sha256": "32349902a37d79f049e52a98929680ff18f9300a270ace1709f16d5d87d70892"
+    },
+    {
+      "path": "walk_gun.mbstyle",
+      "bytes": 126400,
+      "sha256": "6b5f0f6febb92b1fbb090f246e48c4762c23f7d101bc2b371fd93a13a1425245"
+    },
+    {
+      "path": "walk_happy_dance.mbstyle",
+      "bytes": 34112,
+      "sha256": "0900c03fbdcaf4f5fac8e4e3d4ebde5965a8cf561a4ecab07db256a136f3e2e8"
+    },
+    {
+      "path": "walk_left.mbstyle",
+      "bytes": 9408,
+      "sha256": "7660e369e64bc711b153caba744c1ccb3d763060f87b368969fd1ec4819694e5"
+    },
+    {
+      "path": "walk_right.mbstyle",
+      "bytes": 9408,
+      "sha256": "106419603b7844d3f2f804b4debbff47b1ec71969f8dd4c4b4dbaef36d4e5c83"
+    },
+    {
+      "path": "walk_scared.mbstyle",
+      "bytes": 149504,
+      "sha256": "b88776e3d57c7008e94e2a51c8da19d0715a3a42565b47c2019cabb40b13578d"
+    },
+    {
+      "path": "walk_stealth.mbstyle",
+      "bytes": 34112,
+      "sha256": "bbb4b69e29cd78cad102da433dc553f6dc16b6710f9a7d4c7df0148f1492f778"
+    },
+    {
+      "path": "walk_zombie.mbstyle",
+      "bytes": 149504,
+      "sha256": "9ce2769010ecb20c5ad38d36f841ec72e29dd1e4556dff8f0ecb258855a9705b"
+    }
+  ]
+}

@@ -30,6 +30,8 @@ mkdir -p "$SITE/threads"
 cp "$THREADED" "$SITE/threads/"
 cp "$BUILD_JS"/*.wasm "$SITE/component/"
 cp "$ROOT/model/manifest.json" "$SITE/model/manifest.json"
+mkdir -p "$SITE/model/styles"
+cp "$ROOT/web/model/styles/manifest.json" "$SITE/model/styles/"
 # Ternary-ready GGML bundle: pose (TQ1_0), root (Q8_0 parts), vq-decoder and support (tools/ternary/export_gguf.py).
 mkdir -p "$SITE/model/ternary"
 cp "$ROOT"/model/ternary/* "$SITE/model/ternary/"
