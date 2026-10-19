@@ -7,9 +7,11 @@ self.onmessage = ({ data }) => {
         self.postMessage({ ready: true });
         return;
     }
-    self.postMessage({ debug: `start ${data.tid}` });
+    const release = () => { if (data.busy) Atomics.store(data.busy, data.slot, 0); };
     try {
         runThread({ ...data, log: (fd, text) => console.log(text) });
+        release();
     } catch (error) {
+        release();
     }
 };

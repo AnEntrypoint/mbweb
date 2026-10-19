@@ -58,6 +58,7 @@ const state = {
     planning: false, // a plan is in flight
     lookahead: 48, // frames ahead of the playhead where the next plan's seam is placed
     lastTick: 0,
+    lastPlanAt: 0, // playhead when the last plan was requested
     walkDir: 1, // direction of the walk along the session's forward axis: +1 or -1
     legEnd: null, // where the current leg of the walk ends, in metres along the session's forward axis
     goalPx: null, // a clicked point on the stage in pixels, until the figure reaches it
@@ -440,7 +441,8 @@ function stopPlayback() {
 // reference, and a plan is requested whenever fewer than PLAN_BELOW frames remain ahead of it. As the upstream
 // streaming server does, a plan is placed at a seam ahead of the playhead, seeded with the four reference frames at
 // the seam, and its first frames are blended into the reference.
-const PLAN_BELOW = 80; // frames of reference left ahead of the playhead that trigger the next plan
+const PLAN_BELOW = 40; // frames of reference left ahead of the playhead that trigger the next plan
+const PLAN_CADENCE = 16; // frames of playback between plan requests, as the demo replans at its walk cadence
 const TRANSITION_FRAMES = 8; // frames over which a plan is blended into the reference at its seam
 const START_FRAMES = 80; // playback starts once the reference holds this many frames, so the next plan has room to arrive
 
@@ -461,7 +463,11 @@ async function planAhead() {
     state.planning = true;
     try {
         const ref = state.ref;
-        const seam = ref ? Math.min(Math.floor(state.playhead) + state.lookahead, ref.frames - 4) : 0;
+        // The plan takes over from the frame on screen, as the demo's replans do: its first frame is the reference at the
+        // seam, so it continues the motion the figure is showing.
+        // Before playback starts a plan extends the reference from its end; after that it takes over at the playhead.
+        const seam = ref ? (state.started ? Math.min(Math.floor(state.playhead), ref.frames - 4) : ref.frames - 4) : 0;
+        state.lastPlanAt = state.playhead;
         const walk = chooseWalk();
         const motion = await request({
             type: 'plan',
@@ -473,11 +479,6 @@ async function planAhead() {
             context: ref ? contextAt(seam) : null,
         });
         state.seed += 1;
-        // A plan that arrives after the playhead has passed its seam is discarded; the next one starts further ahead.
-        if (ref && seam <= state.playhead) {
-            state.lookahead += 8;
-            return;
-        }
         mergePlan(seam, motion);
     } catch (error) {
         fail(`Cannot generate a motion: ${error.message}`);
@@ -488,18 +489,21 @@ async function planAhead() {
     if (!state.started && state.ref && !state.failed) planAhead();
 }
 
-// Places a plan on the reference at its seam. The plan's first frames are eased in from the reference they replace.
+// Places a plan on the reference. The plan replaces the reference from the frame on screen onward, blended in over
+// TRANSITION_FRAMES so the switch is at the playhead, not at a seam far ahead of it.
 function mergePlan(seam, motion) {
     const old = state.ref;
     const n = motion.frames;
     const total = seam + n;
+    const cut = old ? Math.max(seam, Math.floor(state.playhead)) : seam;
+    if (cut >= total) return; // the playhead has passed the whole plan: nothing to show from it
     const values = new Float32Array(total * FRAME_VALUES);
-    if (old) values.set(old.values.subarray(0, seam * FRAME_VALUES));
-    values.set(motion.values, seam * FRAME_VALUES);
+    if (old) values.set(old.values.subarray(0, Math.min(cut, old.frames) * FRAME_VALUES));
+    values.set(motion.values.subarray((cut - seam) * FRAME_VALUES), cut * FRAME_VALUES);
     if (old) {
-        const blend = Math.min(TRANSITION_FRAMES, n, old.frames - seam);
+        const blend = Math.min(TRANSITION_FRAMES, total - cut, Math.max(0, old.frames - cut));
         for (let i = 0; i < blend; i++) {
-            const at = (seam + i) * FRAME_VALUES;
+            const at = (cut + i) * FRAME_VALUES;
             const u = i / (TRANSITION_FRAMES - 1);
             const eased = u * u * (3 - 2 * u);
             for (let k = 0; k < 3; k++) values[at + k] = old.values[at + k] + eased * (values[at + k] - old.values[at + k]);
@@ -552,7 +556,7 @@ function tickAgent(now) {
     const dt = state.lastTick ? Math.min(0.1, (now - state.lastTick) / 1000) : 0;
     state.lastTick = now;
     state.playhead = Math.min(state.playhead + dt * FPS, state.ref.frames - 1);
-    if (state.ref.frames - state.playhead < PLAN_BELOW) planAhead();
+    if (state.ref.frames - state.playhead < PLAN_BELOW || state.playhead - state.lastPlanAt >= PLAN_CADENCE) planAhead();
     const frame = Math.floor(state.playhead);
     if (frame !== state.frame) drawFrame(frame);
     requestAnimationFrame(tick);

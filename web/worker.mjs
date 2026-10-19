@@ -46,8 +46,12 @@ async function loadComponent(files) {
 const THREAD_POOL = 16;
 const threadPool = [];
 let nextThreadWorker = 0;
+// One busy flag per pool worker, in shared memory: a worker sets its flag while it runs a thread and clears it when the thread
+// returns, so a launch never waits behind a thread that is still running.
+let threadBusy = null; // created with the pool, on isolated pages only
 
 async function startThreadPool() {
+    threadBusy = new Int32Array(new SharedArrayBuffer(4 * THREAD_POOL));
     const started = [];
     for (let i = 0; i < THREAD_POOL; i++) {
         const worker = new Worker(threadWorker);
@@ -56,15 +60,22 @@ async function startThreadPool() {
                 if (event.data?.ready) resolve();
             };
         }));
-        worker.postMessage({ ping: true });
+        worker.postMessage({ ping: true, slot: i, busy: threadBusy });
         threadPool.push(worker);
     }
     await Promise.all(started);
 }
 
 function launchThread(message) {
-    threadPool[nextThreadWorker % threadPool.length].postMessage(message);
-    nextThreadWorker++;
+    let slot = -1;
+    for (let k = 0; k < THREAD_POOL && slot < 0; k++) {
+        const candidate = (nextThreadWorker + k) % THREAD_POOL;
+        if (Atomics.load(threadBusy, candidate) === 0) slot = candidate;
+    }
+    if (slot < 0) slot = nextThreadWorker % THREAD_POOL;
+    nextThreadWorker = slot + 1;
+    Atomics.store(threadBusy, slot, 1);
+    threadPool[slot].postMessage({ ...message, slot, busy: threadBusy });
 }
 
 // Styles and agents: the game path. Every style is a verified .mbstyle asset staged into the same bundle as the weights.
