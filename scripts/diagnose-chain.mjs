@@ -2,7 +2,7 @@
 //
 // Usage: node --experimental-wasm-jspi scripts/diagnose-chain.mjs <component-base-url> [model-dir]
 //   component-base-url  URL of a served site/component/ directory (the transpiled core modules)
-//   model-dir           directory with pose.gguf, root.gguf, support.gguf, vq-decoder.gguf (default model/ternary)
+//   model-dir           directory with pose.gguf, root.gguf, support.gguf, vq-decoder.gguf (default .cache/model/g1-f32, the upstream bundle native-check downloads)
 //
 // Reports, for a standing clip and one chained clip: the standing root and pelvis-to-foot stability over the
 // clip, and how closely the model reproduces the source frames it was given (root, heading, joint positions).
@@ -19,7 +19,7 @@ if (!componentBase) {
     console.error('usage: node --experimental-wasm-jspi scripts/diagnose-chain.mjs <component-base-url> [model-dir]');
     process.exit(2);
 }
-const modelDir = modelArg ?? join(fileURLToPath(new URL('..', import.meta.url)), 'model', 'ternary');
+const modelDir = modelArg ?? join(fileURLToPath(new URL('..', import.meta.url)), '.cache', 'model', 'g1-f32');
 
 const inference = await instantiateComponent(componentBase);
 const files = {};

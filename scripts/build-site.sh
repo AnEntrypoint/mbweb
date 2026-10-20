@@ -43,9 +43,6 @@ if [ -d "$ROOT/web/model/clips" ]; then
     mkdir -p "$SITE/model/clips"
     cp "$ROOT"/web/model/clips/* "$SITE/model/clips/"
 fi
-# Ternary-ready GGML bundle: pose (TQ1_0), root (Q8_0 parts), vq-decoder and support (tools/ternary/export_gguf.py).
-mkdir -p "$SITE/model/ternary"
-cp "$ROOT"/model/ternary/* "$SITE/model/ternary/"
 # Pages serves files as-is; keep the empty marker so no path is filtered by Jekyll.
 touch "$SITE/.nojekyll"
 

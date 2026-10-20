@@ -714,8 +714,9 @@ for (const clip of clipManifest?.clips ?? []) {
     els.clipName.append(new Option(`${clip.name.replaceAll('_', ' ')} (${clip.seconds} s)`, clip.name));
 }
 els.clips.hidden = state.clipEntries.size === 0;
-// The worker has no document location, so the manifest's relative base is resolved here.
-const manifestUrl = new URL('./model/ternary/manifest.json', location.href);
+// The worker has no document location, so the manifest's relative base is resolved here. The manifest is the upstream
+// G1 f32 bundle: the ternary bundle's walk stumbles, and the f32 bundle walks with regular steps.
+const manifestUrl = new URL('./model/manifest.json', location.href);
 const manifest = await (await fetch(manifestUrl)).json();
 manifest.base_url = new URL(manifest.base_url, manifestUrl).href;
 const styleManifestUrl = new URL('./model/styles/manifest.json', location.href);
