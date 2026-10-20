@@ -1,0 +1,7 @@
+{
+    "format": "mbweb-clip-v1",
+    "fps": 30,
+    "joints": 34,
+    "frame_values": 139,
+    "clips": []
+}
