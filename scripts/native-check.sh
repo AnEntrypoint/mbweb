@@ -29,7 +29,7 @@ while read -r path bytes sha base; do
     local_path="$CACHE/model/$path"
     mkdir -p "$(dirname "$local_path")"
     if [ ! -f "$local_path" ] || ! echo "$sha  $local_path" | sha256sum -c --status; then
-        curl -fsSL --retry 3 -o "$local_path.partial" "$base$path"
+        curl -fsSL --http1.1 --retry 10 --retry-all-errors -C - -o "$local_path.partial" "$base$path"
         mv "$local_path.partial" "$local_path"
     fi
     echo "$sha  $local_path" | sha256sum -c --status || { echo "checksum mismatch: $path" >&2; exit 1; }
