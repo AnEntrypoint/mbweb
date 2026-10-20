@@ -233,9 +233,12 @@ function chooseWalk() {
     // plan does not flip from one request to the next. The end is set once per leg and planning only reads it.
     const reached = state.legEnd !== null && (dir > 0 ? z >= state.legEnd - 0.05 : z <= state.legEnd + 0.05);
     if (state.legEnd === null || reached) {
-        if (state.legEnd !== null && state.goalPx === null) dir = -dir;
-        if (runFrom(z, dir) < 0.2 && runFrom(z, -dir) > runFrom(z, dir)) dir = -dir;
-        state.legEnd = z + dir * Math.min(LEG_METRES, runFrom(z, dir));
+        // One decision per leg: turn back at its end, unless the way ahead is too short and the other way has more room.
+        // A leg always has a positive length, so the direction cannot flip again on the next request.
+        let next = state.legEnd !== null && state.goalPx === null ? -dir : dir;
+        if (runFrom(z, next) < 0.2 && runFrom(z, -next) > runFrom(z, next)) next = -next;
+        dir = next;
+        state.legEnd = z + dir * Math.max(0.2, Math.min(LEG_METRES, runFrom(z, dir)));
     }
     state.walkDir = dir;
     const remaining = Math.abs(state.legEnd - z);
@@ -448,7 +451,10 @@ function stopPlayback() {
 // (demo/stream.go): a plan is requested PLAN_LEAD frames before its boundary, placed at max(frame on screen + PLAN_LEAD,
 // boundary), seeded with a fresh agent from the reference's four frames at that seam, and the next boundary is the
 // seam plus min(PLAN_CADENCE, plan frames - 4). Its first TRANSITION_FRAMES eased into the reference (demo/stream_motion.go).
-const PLAN_LEAD = 12; // frames between a plan request and its seam, so the plan is ready before playback reaches it
+// Frames between a plan request and its seam. Upstream's native planner is fast enough for 12; the threaded wasm planner
+// is not, and with a shorter lead playback holds at every seam, which reads as stepping and stopping. 48 frames (1.6 s)
+// covers the wasm planner's latency so the hold rarely fires.
+const PLAN_LEAD = 48;
 const PLAN_CADENCE = 16; // frames between planned seams while walking, the upstream stream server's cadence
 const TRANSITION_FRAMES = 8; // frames over which a plan is blended into the reference at its seam
 const START_FRAMES = 80; // playback starts once the reference holds this many frames, so the next plan has room to arrive
