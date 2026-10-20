@@ -239,8 +239,7 @@ function chooseWalk() {
     }
     state.walkDir = dir;
     const remaining = Math.abs(state.legEnd - z);
-    // nearStop: the leg's end is within one stride, so the planner gets it as a world target to stop at.
-    return { direction: dir, distance: Math.max(0.2, Math.min(WALK_DISTANCE, remaining)), nearStop: remaining < WALK_DISTANCE };
+    return { direction: dir, distance: Math.max(0.2, Math.min(WALK_DISTANCE, remaining)) };
 }
 
 // Pelvis-relative side-view offsets for one frame, as [depth, height] pairs in model units.
@@ -484,7 +483,9 @@ async function planAhead() {
             style: 'walk',
             direction: walk.direction,
             speed: -1,
-            target: walk.nearStop ? { z: state.legEnd } : null,
+            // Walks carry a direction only, as the upstream stream server's walk does: a world target would make the planner
+            // slow toward a fixed point at every leg end, which reads as hesitation.
+            target: null,
             seed: state.seed,
             context: ref ? contextAt(Math.min(seam, ref.frames - 4)) : null,
         });
