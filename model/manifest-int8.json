@@ -1,0 +1,39 @@
+{
+  "repository": "AnEntrypoint/mbweb",
+  "revision": "model-int8-v1",
+  "base_url": "int8/",
+  "note": "pose: int8 trit weights in Q8_0 blocks (values -1/0/+1 x row scale); root, vq-decoder: f32; support: upstream. Files are served same-origin from model/int8/ as parts (staged by scripts/fetch-int8-model.sh from the model-int8-v1 release).",
+  "files": [
+    {
+      "path": "pose.gguf",
+      "bytes": 146137536,
+      "sha256": "c4fa2d88b4fc83a5134db22d76a7756024f2cf1822f435763ce9419e918aae2a",
+      "parts": [
+        "pose.gguf.part00",
+        "pose.gguf.part01",
+        "pose.gguf.part02"
+      ]
+    },
+    {
+      "path": "root.gguf",
+      "bytes": 136504000,
+      "sha256": "46268d77e5c15449d68a39ce6ec7145e9eb457c5114d5dca934bd3ab539b29db",
+      "parts": [
+        "root.gguf.part00",
+        "root.gguf.part01",
+        "root.gguf.part02"
+      ]
+    },
+    {
+      "path": "vq-decoder.gguf",
+      "bytes": 49753440,
+      "sha256": "6a1114b6906b07fab9deb18d602b4e731e1b5794318b1643ffd0605692f62d1e"
+    },
+    {
+      "path": "support.gguf",
+      "bytes": 5472,
+      "sha256": "5d41cae4bc494e612ef19e25f599351aafbc9ef1cb46d4ac3f1e42bb7ab07200"
+    }
+  ],
+  "source_base_url": "https://github.com/AnEntrypoint/mbweb/releases/download/model-int8-v1/"
+}

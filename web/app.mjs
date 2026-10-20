@@ -257,33 +257,48 @@ function pelvisOffsets(clip, frame) {
     return out;
 }
 
-function drawFrame(frame) {
+function lerp(a, b, t) {
+    return a + (b - a) * t;
+}
+
+// Draws the clip at a fractional frame. The figure is interpolated between the two frames either side of it, so its
+// root and pose move continuously instead of stepping from frame to frame.
+function drawFrame(time) {
     const width = els.canvas.clientWidth;
     const height = els.canvas.clientHeight;
     ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--stage-bg').trim() || '#f7f5f0';
     ctx.fillRect(0, 0, width, height);
     if (!state.clip) return;
 
+    const frame = Math.min(Math.floor(time), state.clip.frames - 1);
+    const within = Math.min(time - frame, 1);
+    const next = Math.min(frame + 1, state.clip.frames - 1);
+
     // One scale and one set of extents for the whole session, so the figure keeps its size across clips.
     const { span, extent } = state;
     const scale = (Math.min(width, height) * 0.3) / span;
     const floorY = height * FLOOR_FRACTION;
+    const { values } = state.clip;
     // The camera holds the figure: its pelvis is the model's root at this frame, and the floor moves past it.
-    const rootZ = state.clip.values[frame * FRAME_VALUES + 2];
+    const rootZ = lerp(values[frame * FRAME_VALUES + 2], values[next * FRAME_VALUES + 2], within);
     const toStage = (z) => width * FIGURE_FRACTION + (z - rootZ) * scale;
     // The pelvis is placed at the model's own root height: the floor is the model's ground plane, as in the upstream
     // demo, which writes the model's root into the robot's pose without adjusting it.
     const cx = width * FIGURE_FRACTION;
-    const cy = floorY - state.clip.values[frame * FRAME_VALUES + 1] * scale;
+    const cy = floorY - lerp(values[frame * FRAME_VALUES + 1], values[next * FRAME_VALUES + 1], within) * scale;
     // The side view always faces the way the model walks: the model is aimed along the floor.
     const facing = 1;
     const offsets = pelvisOffsets(state.clip, frame);
+    if (within > 0) {
+        const ahead = pelvisOffsets(state.clip, next);
+        for (let i = 0; i < offsets.length; i++) offsets[i] = lerp(offsets[i], ahead[i], within);
+    }
     if (state.blend) {
         // Ease the pose from the outgoing clip's last frame into this clip over its first frames.
-        const weight = Math.max(0, 1 - frame / BLEND_FRAMES);
+        const weight = Math.max(0, 1 - time / BLEND_FRAMES);
         const eased = weight * weight * (3 - 2 * weight);
         for (let i = 0; i < offsets.length; i++) offsets[i] += (state.blend[i] - offsets[i]) * eased;
-        if (frame >= BLEND_FRAMES) state.blend = null;
+        if (time >= BLEND_FRAMES) state.blend = null;
     }
 
     const ground = getComputedStyle(document.body).getPropertyValue('--ground').trim() || '#b9b3a6';
@@ -635,8 +650,7 @@ function tickAgent(now) {
     if (state.clipActive && state.playhead >= state.ref.frames - 1) state.clipActive = false;
     const inClip = state.clipActive || state.clipPending;
     if (!inClip && state.playhead >= state.nextPlan - PLAN_LEAD) planAhead();
-    const frame = Math.floor(state.playhead);
-    if (frame !== state.frame) drawFrame(frame);
+    drawFrame(state.playhead);
     requestAnimationFrame(tick);
 }
 
@@ -649,7 +663,7 @@ function tick(now) {
         state.looping = false;
         return;
     }
-    let position = state.startFrame + Math.floor(((now - state.startedAt) / 1000) * FPS);
+    let position = state.startFrame + ((now - state.startedAt) / 1000) * FPS;
     if (position >= state.clip.frames) {
         const overrun = position - state.clip.frames;
         if (advanceClip()) {
@@ -665,8 +679,7 @@ function tick(now) {
         }
     }
     fillQueue();
-    const frame = Math.min(position, state.clip.frames - 1);
-    if (frame !== state.frame) drawFrame(frame);
+    drawFrame(Math.min(position, state.clip.frames - 1));
     requestAnimationFrame(tick);
 }
 
@@ -690,10 +703,12 @@ els.clipPlay.addEventListener('click', () => {
     const entry = state.clipEntries.get(els.clipName.value);
     if (entry) playClip(entry);
 });
-// J plays the jump, as the upstream demo's Jump key does.
+// J plays the jump, as the upstream demo's Jump key does. R runs and A attacks.
+const CLIP_KEYS = { j: 'jump_forward', r: 'run', a: 'attack' };
 window.addEventListener('keydown', (event) => {
-    if (event.key !== 'j' || event.target.matches?.('input, select, textarea')) return;
-    const entry = state.clipEntries.get('jump_forward');
+    if (event.target.matches?.('input, select, textarea')) return;
+    const name = CLIP_KEYS[event.key.toLowerCase()];
+    const entry = name && state.clipEntries.get(name);
     if (entry) playClip(entry);
 });
 window.addEventListener('resize', resizeCanvas);
@@ -714,9 +729,10 @@ for (const clip of clipManifest?.clips ?? []) {
     els.clipName.append(new Option(`${clip.name.replaceAll('_', ' ')} (${clip.seconds} s)`, clip.name));
 }
 els.clips.hidden = state.clipEntries.size === 0;
-// The worker has no document location, so the manifest's relative base is resolved here. The manifest is the upstream
-// G1 f32 bundle: the ternary bundle's walk stumbles, and the f32 bundle walks with regular steps.
-const manifestUrl = new URL('./model/manifest.json', location.href);
+// The worker has no document location, so the manifest's relative base is resolved here. The manifest is the int8 trit
+// pose with the upstream f32 root (model/manifest-int8.json, served from the model release): the pose's int8 weights walk
+// with regular steps and run the relaxed-SIMD kernel; the all-ternary root did not walk.
+const manifestUrl = new URL('./model/manifest-int8.json', location.href);
 const manifest = await (await fetch(manifestUrl)).json();
 manifest.base_url = new URL(manifest.base_url, manifestUrl).href;
 const styleManifestUrl = new URL('./model/styles/manifest.json', location.href);

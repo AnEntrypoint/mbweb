@@ -173,6 +173,13 @@ def choose_type(name, shape, keep_fp):
     return TYPE_F32
 
 
+def build_trit_q8_bytes(tensor):
+    codes, scale = absmean_ternary(tensor.detach().float())
+    codes_np = codes.numpy()
+    scale16 = scale.reshape(-1).half().float().numpy()
+    return b"".join(pack_q8_0_row(codes_np[r], float(scale16[r])) for r in range(codes_np.shape[0]))
+
+
 def build_tensor_bytes(name, tensor, gtype):
     t = tensor.detach().float()
     if gtype == TYPE_F32:
@@ -256,7 +263,7 @@ def write_gguf(path, tensors, metadata):
             f.write(b"\0" * (_align(len(payload)) - len(payload)))
 
 
-def export(ckpt_path, out_path, component="pose"):
+def export(ckpt_path, out_path, component="pose", trit_q8=False):
     ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     sd, keep_fp = ck["backbone"], tuple(ck["keep_fp"])
     tensors = []
@@ -269,6 +276,17 @@ def export(ckpt_path, out_path, component="pose"):
             gtype = TYPE_F16  # root conv kernels; patches/motion-bricks/0002 accepts F16
         elif t.dim() != 2 or not (name.endswith(".weight") or name.endswith(".in_proj_weight")):
             gtype = TYPE_F32  # ggml_add with an F16 bias aborts; upstream keeps these F32
+        elif trit_q8 and any(k in name for k in keep_fp) and t.shape[1] % 32 == 0:
+            # kept full-precision layers stay F32: their values are not trit codes, so the relaxed kernel must not see them
+            kept_type = TYPE_F32 if name in F32_NAMES else TYPE_Q8_0
+            tensors.append((compact_name(name), kept_type, tuple(t.shape), build_tensor_bytes(name, t, kept_type)))
+            continue
+        elif trit_q8 and name not in F32_NAMES and t.shape[1] % 32 == 0:
+            # int8 variant: every linear is Q8_0 whose int8 values are the trit codes (exact in the i7 range of
+            # the relaxed-SIMD dot product), with the row's absmean scale in each block's fp16 d.
+            gtype = TYPE_Q8_0
+            tensors.append((compact_name(name), gtype, tuple(t.shape), build_trit_q8_bytes(t)))
+            continue
         else:
             gtype = choose_type(name, t.shape, keep_fp)
         tensors.append((compact_name(name), gtype, tuple(t.shape), build_tensor_bytes(name, t, gtype)))
@@ -280,8 +298,9 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--trit-q8", action="store_true", help="int8 variant: linears as Q8_0 trit codes")
     a = ap.parse_args()
-    total = export(a.ckpt, a.out)
+    total = export(a.ckpt, a.out, trit_q8=a.trit_q8)
     print(f"wrote {total / 2**20:.1f} MiB payload to {a.out}")
 
 
