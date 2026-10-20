@@ -11,16 +11,16 @@ JOBS="${JOBS:-$(nproc)}"
 SRC="$("$ROOT/scripts/fetch-motion-bricks.sh" "$CACHE")"
 
 cmake -S "$SRC" -B "$BUILD" -G Ninja \
-    -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+    -DCMAKE_C_COMPILER="${CC:-clang}" -DCMAKE_CXX_COMPILER="${CXX:-clang++}" \
     -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
     -DMOTIONBRICKS_ENABLE_GGML=ON -DMOTIONBRICKS_ENABLE_VULKAN=OFF \
     -DMOTIONBRICKS_ENABLE_LLAMAFILE=OFF -DMOTIONBRICKS_CPU_ALL_VARIANTS=OFF \
     -DMOTIONBRICKS_ENABLE_PHYSICS=OFF -DMOTIONBRICKS_ENABLE_SONIC=OFF \
     -DMOTIONBRICKS_DOWNLOAD_MODELS=OFF -DMOTIONBRICKS_BUILD_TESTS=OFF \
-    -DGGML_OPENMP=OFF -DGGML_CPU_ALL_VARIANTS=OFF -DGGML_BACKEND_DL=OFF -DGGML_NATIVE=OFF >&2
+    -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DGGML_OPENMP=OFF -DGGML_CPU_ALL_VARIANTS=OFF -DGGML_BACKEND_DL=OFF -DGGML_NATIVE=OFF >&2
 cmake --build "$BUILD" --target motionbricks_static -j "$JOBS" >&2
 
-clang -std=c11 -O2 -I"$SRC/include" "$ROOT/tests/native/standing.c" -o "$BUILD/standing" \
+"${CC:-clang}" -std=c11 -O2 -I"$SRC/include" "$ROOT/tests/native/standing.c" -o "$BUILD/standing" \
     "$BUILD/libmotionbricks.a" "$BUILD/ggml/src/libggml.a" "$BUILD/ggml/src/libggml-cpu.a" \
     "$BUILD/ggml/src/libggml-base.a" -lstdc++ -lm -lpthread -ldl
 
