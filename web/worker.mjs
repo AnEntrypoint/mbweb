@@ -122,11 +122,9 @@ async function loadAgent(styleFiles) {
     standingHeight = globalRoot[1];
 }
 
-// One planned motion, as the demo's web client plans it: one agent per session. Each plan advances that agent to the frame
-// on screen (advance) and plans from there, so its motion continues the one it generated. A new agent is seeded from
-// four frames of context when there is no session yet, or when the frame on screen is outside the agent's last plan.
+// One planned motion, as the upstream stream server plans it (demo/stream.go): a fresh agent per plan, seeded with the
+// four reference frames at the seam. Without context the agent starts from the style's reset pose.
 let session = 0;
-let sessionFrames = 0;
 
 function seedSession(context, handle) {
     const x = threaded.exports;
@@ -153,16 +151,11 @@ function seedSession(context, handle) {
     if (status !== 0) throw threadedError('agent context');
 }
 
-function planThreaded({ style, direction, speed, target, seed, context, advance }) {
+function planThreaded({ style, direction, speed, target, seed, context }) {
     const x = threaded.exports;
     const handle = styles.get(style);
     const heading = direction > 0 ? 0 : Math.PI;
-    const reuse = session !== 0 && advance !== null && advance >= 0 && advance < sessionFrames;
-    if (reuse) {
-        if (x.mbx_agent_advance(session, advance) !== 0) throw threadedError('agent advance');
-    } else {
-        seedSession(context, handle);
-    }
+    seedSession(context, handle);
     const command = x.mb_command_new(handle, 0, 0, direction, 0, 0, direction, speed, target ? 1 : 0,
                                      0, 0.787, target ? target.z : 0, heading, BigInt(seed));
     const framesPtr = x.mb_alloc(4);
@@ -183,7 +176,6 @@ function planThreaded({ style, direction, speed, target, seed, context, advance 
     x.mb_free(rootsAt);
     x.mb_free(rotationsAt);
     for (const pointer of [framesPtr, outRootsPtr, outRotationsPtr]) x.mb_free(pointer);
-    sessionFrames = frames;
     return { frames, values };
 }
 

@@ -61,13 +61,11 @@ const state = {
     planning: false, // a plan is in flight
     clipPending: false, // a clip is waiting for the in-flight plan to land
     clipActive: false, // a clip is playing from the reference: no plans until it ends
-    reseed: false, // the next plan starts a fresh agent from the reference's last four frames (after a clip)
     clipEntries: new Map(), // the clips listed in the manifest, by name
     clips: new Map(), // loaded clip data, by name (a promise until it arrives)
     lookahead: 48, // frames ahead of the playhead where the next plan's seam is placed
     lastTick: 0,
-    lastPlanAt: 0, // playhead when the last plan was requested
-    agentBase: 0, // the reference frame where the worker's agent plan starts
+    nextPlan: 0, // the next planned boundary on the reference, in frames
     walkDir: 1, // direction of the walk along the session's forward axis: +1 or -1
     legEnd: null, // where the current leg of the walk ends, in metres along the session's forward axis
     goalPx: null, // a clicked point on the stage in pixels, until the figure reaches it
@@ -446,12 +444,12 @@ function stopPlayback() {
     els.play.setAttribute('aria-pressed', 'false');
 }
 
-// The reference is the motion being played, one continuous timeline. Playback never holds: the playhead moves on the
-// reference, and a plan is requested whenever fewer than PLAN_BELOW frames remain ahead of it. As the upstream
-// streaming server does, a plan is placed at a seam ahead of the playhead, seeded with the four reference frames at
-// the seam, and its first frames are blended into the reference.
-const PLAN_BELOW = 40; // frames of reference left ahead of the playhead that trigger the next plan
-const PLAN_CADENCE = 16; // frames of playback between plan requests, the demo's walk cadence
+// The reference is the motion being played, one continuous timeline. Replanning follows the upstream stream server
+// (demo/stream.go): a plan is requested PLAN_LEAD frames before its boundary, placed at max(frame on screen + PLAN_LEAD,
+// boundary), seeded with a fresh agent from the reference's four frames at that seam, and the next boundary is the
+// seam plus min(PLAN_CADENCE, plan frames - 4). Its first TRANSITION_FRAMES eased into the reference (demo/stream_motion.go).
+const PLAN_LEAD = 12; // frames between a plan request and its seam, so the plan is ready before playback reaches it
+const PLAN_CADENCE = 16; // frames between planned seams while walking, the upstream stream server's cadence
 const TRANSITION_FRAMES = 8; // frames over which a plan is blended into the reference at its seam
 const START_FRAMES = 80; // playback starts once the reference holds this many frames, so the next plan has room to arrive
 
@@ -472,17 +470,12 @@ async function planAhead() {
     state.planning = true;
     try {
         const ref = state.ref;
-        // The plan takes over from the frame on screen, as the demo's replans do: its first frame is the reference at the
-        // seam, so it continues the motion the figure is showing.
-        // Before playback starts a plan extends the reference from its end; after that it takes over at the playhead.
-        // The plan starts at the frame on screen, as the demo's web client does. Before playback starts it extends the
-        // reference from its end.
-        const seam = ref ? (state.started ? Math.floor(state.playhead) : Math.max(0, ref.frames - 4)) : 0;
-        const contextSeam = ref ? Math.min(seam, ref.frames - 4) : 0;
-        state.lastPlanAt = state.playhead;
-        // After a clip the agent starts again from the clip's last four frames, as the upstream demo's web client does.
-        const reseed = state.reseed;
-        state.reseed = false;
+        // Before playback starts a plan extends the reference from its end; after that it is placed at the boundary the
+        // reference reached, but never closer than PLAN_LEAD to the frame on screen.
+        // A clip can end before the boundary: the seam then falls on the clip's last frame, where the reference stops.
+        const seam = ref
+            ? Math.min(ref.frames - 1, state.started ? Math.max(Math.ceil(state.playhead) + PLAN_LEAD, state.nextPlan) : Math.max(0, ref.frames - 4))
+            : 0;
         const walk = chooseWalk();
         const motion = await request({
             type: 'plan',
@@ -491,12 +484,11 @@ async function planAhead() {
             speed: -1,
             target: walk.nearStop ? { z: state.legEnd } : null,
             seed: state.seed,
-            context: ref ? contextAt(contextSeam) : null,
-            advance: ref && !reseed ? seam - state.agentBase : null,
+            context: ref ? contextAt(Math.min(seam, ref.frames - 4)) : null,
         });
         state.seed += 1;
         mergePlan(seam, motion);
-        state.agentBase = seam;
+        state.nextPlan = seam + Math.min(PLAN_CADENCE, motion.frames - 4);
     } catch (error) {
         fail(`Cannot generate a motion: ${error.message}`);
     } finally {
@@ -605,6 +597,8 @@ async function playClip(entry) {
         const rise = ref.values[at + 1] - placed[1];
         for (let frame = 0; frame < entry.frames; frame++) placed[frame * FRAME_VALUES + 1] += rise;
         mergePlan(seam, { frames: entry.frames, values: placed });
+        // As the upstream server does, an authored clip is played in full and the next plan is due at its end.
+        state.nextPlan = seam + entry.frames - 1;
         state.clipActive = true;
         setStatus(`Playing ${entry.name}`, 'ready');
     } catch (error) {
@@ -625,12 +619,9 @@ function tickAgent(now) {
     state.lastTick = now;
     state.playhead = Math.min(state.playhead + dt * FPS, state.ref.frames - 1);
     // A clip is the reference itself, so no plan may land in it. When the clip's last frame is reached the walk resumes.
-    if (state.clipActive && state.playhead >= state.ref.frames - 1) {
-        state.clipActive = false;
-        state.reseed = true;
-    }
+    if (state.clipActive && state.playhead >= state.ref.frames - 1) state.clipActive = false;
     const inClip = state.clipActive || state.clipPending;
-    if (!inClip && (state.ref.frames - state.playhead < PLAN_BELOW || state.playhead - state.lastPlanAt >= PLAN_CADENCE)) planAhead();
+    if (!inClip && state.playhead >= state.nextPlan - PLAN_LEAD) planAhead();
     const frame = Math.floor(state.playhead);
     if (frame !== state.frame) drawFrame(frame);
     requestAnimationFrame(tick);
