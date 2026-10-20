@@ -30,6 +30,13 @@
                 <input id="scrub" type="range" min="0" max="0" value="0" step="1" disabled>
             </label>
         </div>
+        <div id="clips" class="controls" hidden>
+            <label class="scrubber">
+                <span>Clip</span>
+                <select id="clip-name" disabled></select>
+            </label>
+            <button id="clip-play" type="button" disabled>Play clip</button>
+        </div>
         <p id="frame-label" class="meta"></p>
     </main>
     <script type="module" src="./app.js"></script>

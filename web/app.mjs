@@ -8,6 +8,9 @@ const els = {
     progress: document.getElementById('progress'),
     play: document.getElementById('play'),
     scrub: document.getElementById('scrub'),
+    clips: document.getElementById('clips'),
+    clipName: document.getElementById('clip-name'),
+    clipPlay: document.getElementById('clip-play'),
     frameLabel: document.getElementById('frame-label'),
     canvas: document.getElementById('stage'),
 };
@@ -56,6 +59,11 @@ const state = {
     ref: null, // the reference: one continuous timeline of the motion being played ({ values, frames })
     playhead: 0, // position on the reference, in frames
     planning: false, // a plan is in flight
+    clipPending: false, // a clip is waiting for the in-flight plan to land
+    clipActive: false, // a clip is playing from the reference: no plans until it ends
+    reseed: false, // the next plan starts a fresh agent from the reference's last four frames (after a clip)
+    clipEntries: new Map(), // the clips listed in the manifest, by name
+    clips: new Map(), // loaded clip data, by name (a promise until it arrives)
     lookahead: 48, // frames ahead of the playhead where the next plan's seam is placed
     lastTick: 0,
     lastPlanAt: 0, // playhead when the last plan was requested
@@ -460,7 +468,7 @@ function contextAt(seam) {
 }
 
 async function planAhead() {
-    if (state.planning) return;
+    if (state.planning || state.clipPending) return;
     state.planning = true;
     try {
         const ref = state.ref;
@@ -472,6 +480,9 @@ async function planAhead() {
         const seam = ref ? (state.started ? Math.floor(state.playhead) : Math.max(0, ref.frames - 4)) : 0;
         const contextSeam = ref ? Math.min(seam, ref.frames - 4) : 0;
         state.lastPlanAt = state.playhead;
+        // After a clip the agent starts again from the clip's last four frames, as the upstream demo's web client does.
+        const reseed = state.reseed;
+        state.reseed = false;
         const walk = chooseWalk();
         const motion = await request({
             type: 'plan',
@@ -481,7 +492,7 @@ async function planAhead() {
             target: walk.nearStop ? { z: state.legEnd } : null,
             seed: state.seed,
             context: ref ? contextAt(contextSeam) : null,
-            advance: ref ? seam - state.agentBase : null,
+            advance: ref && !reseed ? seam - state.agentBase : null,
         });
         state.seed += 1;
         mergePlan(seam, motion);
@@ -550,8 +561,58 @@ function mergePlan(seam, motion) {
         state.playhead = seam;
         drawFrame(0);
         startPlayback();
+        updateClipControls();
     }
     setStatus(`Generated ${n} frames`, 'ready');
+}
+
+// Kimodo clips (animation/build-clips.mjs), played the way the upstream demo plays its Kimodo animations: the clip
+// starts at the frame on screen, aligned to that frame's pose and heading, and the walk resumes from the clip's last
+// four frames. The clip is merged into the reference, so it is blended in like a plan and drawn by the same path.
+async function loadClip(entry) {
+    if (!state.clips.has(entry.name)) {
+        const load = fetch(new URL(`./model/clips/${entry.file}`, location.href))
+            .then((response) => {
+                if (!response.ok) throw new Error(`${entry.name}: HTTP ${response.status}`);
+                return response.arrayBuffer();
+            })
+            .then((bytes) => {
+                if (bytes.byteLength !== entry.frames * FRAME_VALUES * 4) throw new Error(`${entry.name}: unexpected size`);
+                return new Float32Array(bytes);
+            });
+        state.clips.set(entry.name, load);
+        load.catch(() => state.clips.delete(entry.name));
+    }
+    return state.clips.get(entry.name);
+}
+
+async function playClip(entry) {
+    if (!state.ref || !state.started || state.clipPending || state.failed) return;
+    state.clipPending = true;
+    try {
+        const clip = await loadClip(entry);
+        // The clip replaces the reference from the frame on screen, so a plan in flight must land first.
+        while (state.planning) await new Promise((resolve) => setTimeout(resolve, 10));
+        const ref = state.ref;
+        const seam = Math.floor(state.playhead);
+        const at = seam * FRAME_VALUES;
+        // Turn the clip to the frame on screen's heading, then move its first root onto that frame's root; the height
+        // follows the same rule, so the clip begins exactly where the figure is.
+        const yaw = headingAt(ref.values, seam) - headingAt(clip, 0);
+        const turned = placeFrames(clip, entry.frames, { x: 0, z: 0 }, yaw);
+        const origin = { x: ref.values[at] - turned[0], z: ref.values[at + 2] - turned[2] };
+        const placed = placeFrames(clip, entry.frames, origin, yaw);
+        const rise = ref.values[at + 1] - placed[1];
+        for (let frame = 0; frame < entry.frames; frame++) placed[frame * FRAME_VALUES + 1] += rise;
+        mergePlan(seam, { frames: entry.frames, values: placed });
+        state.clipActive = true;
+        setStatus(`Playing ${entry.name}`, 'ready');
+    } catch (error) {
+        // A clip that cannot be loaded leaves the walk running.
+        setStatus(`Cannot play ${entry.name}: ${error.message}`, 'ready');
+    } finally {
+        state.clipPending = false;
+    }
 }
 
 function tickAgent(now) {
@@ -563,7 +624,13 @@ function tickAgent(now) {
     const dt = state.lastTick ? Math.min(0.1, (now - state.lastTick) / 1000) : 0;
     state.lastTick = now;
     state.playhead = Math.min(state.playhead + dt * FPS, state.ref.frames - 1);
-    if (state.ref.frames - state.playhead < PLAN_BELOW || state.playhead - state.lastPlanAt >= PLAN_CADENCE) planAhead();
+    // A clip is the reference itself, so no plan may land in it. When the clip's last frame is reached the walk resumes.
+    if (state.clipActive && state.playhead >= state.ref.frames - 1) {
+        state.clipActive = false;
+        state.reseed = true;
+    }
+    const inClip = state.clipActive || state.clipPending;
+    if (!inClip && (state.ref.frames - state.playhead < PLAN_BELOW || state.playhead - state.lastPlanAt >= PLAN_CADENCE)) planAhead();
     const frame = Math.floor(state.playhead);
     if (frame !== state.frame) drawFrame(frame);
     requestAnimationFrame(tick);
@@ -615,10 +682,34 @@ els.scrub.addEventListener('input', () => {
     stopPlayback();
     drawFrame(Number(els.scrub.value));
 });
+els.clipPlay.addEventListener('click', () => {
+    const entry = state.clipEntries.get(els.clipName.value);
+    if (entry) playClip(entry);
+});
+// J plays the jump, as the upstream demo's Jump key does.
+window.addEventListener('keydown', (event) => {
+    if (event.key !== 'j' || event.target.matches?.('input, select, textarea')) return;
+    const entry = state.clipEntries.get('jump_forward');
+    if (entry) playClip(entry);
+});
 window.addEventListener('resize', resizeCanvas);
+
+function updateClipControls() {
+    const usable = state.started && !state.failed && state.clipEntries.size > 0;
+    els.clipPlay.disabled = !usable;
+    els.clipName.disabled = !usable;
+}
 
 resizeCanvas();
 setStatus('Starting', 'loading');
+const clipManifest = await fetch(new URL('./model/clips/manifest.json', location.href))
+    .then((response) => (response.ok ? response.json() : null))
+    .catch(() => null);
+for (const clip of clipManifest?.clips ?? []) {
+    state.clipEntries.set(clip.name, clip);
+    els.clipName.append(new Option(`${clip.name.replaceAll('_', ' ')} (${clip.seconds} s)`, clip.name));
+}
+els.clips.hidden = state.clipEntries.size === 0;
 // The worker has no document location, so the manifest's relative base is resolved here.
 const manifestUrl = new URL('./model/ternary/manifest.json', location.href);
 const manifest = await (await fetch(manifestUrl)).json();

@@ -1,0 +1,26 @@
+[
+    {
+        "name": "jump_forward",
+        "prompt": "a person jumps forward over an obstacle, taking off with both feet and landing softly",
+        "frames": 60,
+        "seed": 1
+    },
+    {
+        "name": "jump_up",
+        "prompt": "a person jumps straight up in place with both feet and lands",
+        "frames": 48,
+        "seed": 1
+    },
+    {
+        "name": "step_over",
+        "prompt": "a person steps forward over a low obstacle with a long stride",
+        "frames": 60,
+        "seed": 1
+    },
+    {
+        "name": "turn_around",
+        "prompt": "a person turns around one hundred eighty degrees and walks back the way they came",
+        "frames": 90,
+        "seed": 1
+    }
+]

@@ -10,3 +10,5 @@ component/gen/
 *.gguf
 .env
 !model/ternary/*.gguf
+# Kimodo toolchain, weights and raw generator output (animation/fetch.sh)
+.kimodo/

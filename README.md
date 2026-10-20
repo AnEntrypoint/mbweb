@@ -22,6 +22,8 @@ Measured results and deliberate deviations are in its [RESULTS.md](docs/prd/moti
 | `scripts/build-site.sh` | Bundles the page and assembles `site/` for Pages. |
 | `scripts/smoke.mjs` | Drives the built page in headless Chromium (PRD-04, PRD-05). |
 | `scripts/native-check.sh` | One native inference call through the same sources (PRD-02). |
+| `animation/` | Kimodo clip pipeline: pinned kimodo.cpp, weight fetch, clip catalogue and generator (see `animation/README.md`). |
+| `web/model/clips/` | Generated Kimodo clips and their manifest, published with the site. |
 | `model/manifest.json` | The pinned Hugging Face revision with each file's size and SHA-256. |
 | `.github/workflows/pages.yml` | CI: build, smoke test, and deploy to Pages on `main` (PRD-06). |
 
