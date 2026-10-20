@@ -66,6 +66,7 @@ const state = {
     lookahead: 48, // frames ahead of the playhead where the next plan's seam is placed
     lastTick: 0,
     nextPlan: 0, // the next planned boundary on the reference, in frames
+    reserved: null, // the seam of the plan in flight: playback holds just before it until the plan lands
     walkDir: 1, // direction of the walk along the session's forward axis: +1 or -1
     legEnd: null, // where the current leg of the walk ends, in metres along the session's forward axis
     goalPx: null, // a clicked point on the stage in pixels, until the figure reaches it
@@ -477,6 +478,7 @@ async function planAhead() {
             ? Math.min(ref.frames - 1, state.started ? Math.max(Math.ceil(state.playhead) + PLAN_LEAD, state.nextPlan) : Math.max(0, ref.frames - 4))
             : 0;
         const walk = chooseWalk();
+        state.reserved = seam;
         const motion = await request({
             type: 'plan',
             style: 'walk',
@@ -492,6 +494,7 @@ async function planAhead() {
     } catch (error) {
         fail(`Cannot generate a motion: ${error.message}`);
     } finally {
+        state.reserved = null;
         state.planning = false;
     }
     // Before playback starts nothing ticks, so keep planning until the reference is long enough.
@@ -617,7 +620,10 @@ function tickAgent(now) {
     }
     const dt = state.lastTick ? Math.min(0.1, (now - state.lastTick) / 1000) : 0;
     state.lastTick = now;
-    state.playhead = Math.min(state.playhead + dt * FPS, state.ref.frames - 1);
+    // Playback holds just before the seam of a plan in flight, as the upstream server does: a plan that lands after its
+    // seam has passed would be cut at the playhead, not at the seam it was generated from.
+    const hold = state.reserved !== null ? state.reserved - 1 : Infinity;
+    state.playhead = Math.min(state.playhead + dt * FPS, state.ref.frames - 1, Math.max(state.playhead, hold));
     // A clip is the reference itself, so no plan may land in it. When the clip's last frame is reached the walk resumes.
     if (state.clipActive && state.playhead >= state.ref.frames - 1) state.clipActive = false;
     const inClip = state.clipActive || state.clipPending;
