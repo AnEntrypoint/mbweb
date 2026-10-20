@@ -3,5 +3,64 @@
     "fps": 30,
     "joints": 34,
     "frame_values": 139,
-    "clips": []
+    "clips": [
+        {
+            "name": "jump_forward",
+            "prompt": "a person jumps forward over an obstacle, taking off with both feet and landing softly",
+            "seed": 1,
+            "steps": 100,
+            "frames": 60,
+            "seconds": 2,
+            "file": "jump_forward.clip",
+            "bytes": 33360,
+            "sha256": "8adb233fdfa497e18936ded3d6e2e06efa9503a87735885e42d00ec46003036a",
+            "max_root_step_m": 0.1129,
+            "max_rotation_norm_error": 0
+        },
+        {
+            "name": "jump_up",
+            "prompt": "a person jumps straight up in place with both feet and lands",
+            "seed": 1,
+            "steps": 100,
+            "frames": 48,
+            "seconds": 1.6,
+            "file": "jump_up.clip",
+            "bytes": 26688,
+            "sha256": "8d6253127b684ab87cc79b2cec64a041d511d34ffe3d67edcc0f692155bb6967",
+            "max_root_step_m": 0.0663,
+            "max_rotation_norm_error": 0
+        },
+        {
+            "name": "step_over",
+            "prompt": "a person steps forward over a low obstacle with a long stride",
+            "seed": 1,
+            "steps": 100,
+            "frames": 60,
+            "seconds": 2,
+            "file": "step_over.clip",
+            "bytes": 33360,
+            "sha256": "958e330fb9d6a097aaf06ada10a905cda797d5abf1703a91117005da47f5e4b7",
+            "max_root_step_m": 0.0502,
+            "max_rotation_norm_error": 0
+        },
+        {
+            "name": "turn_around",
+            "prompt": "a person turns around one hundred eighty degrees and walks back the way they came",
+            "seed": 1,
+            "steps": 100,
+            "frames": 90,
+            "seconds": 3,
+            "file": "turn_around.clip",
+            "bytes": 50040,
+            "sha256": "eca6278f6364c3ac677151fc3091d2f3dbc6bb45a877a3ec2bc110934e6f07d4",
+            "max_root_step_m": 0.0305,
+            "max_rotation_norm_error": 0
+        }
+    ],
+    "source": {
+        "kimodo_repo": "https://github.com/localai-org/kimodo.cpp.git",
+        "kimodo_commit": "ed8a931aedb132f768190f6931c365855caba74c",
+        "motion_model": "g1-rp-v1",
+        "text_quantization": "q4_k_m"
+    }
 }
