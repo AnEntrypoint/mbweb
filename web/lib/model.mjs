@@ -73,6 +73,15 @@ async function forgetCached(cache, manifest, file) {
     }
 }
 
+// Caching is best-effort (quota, private windows): the verified bytes are still used when it fails.
+async function storeBestEffort(cache, manifest, file, bytes) {
+    try {
+        await storeCached(cache, manifest, file, bytes);
+    } catch {
+        await forgetCached(cache, manifest, file).catch(() => {});
+    }
+}
+
 // Joins a multi-part file from its parts in order, reporting progress against the whole file.
 async function fetchParts(manifest, file, onProgress) {
     const bytes = new Uint8Array(file.bytes);
@@ -101,8 +110,8 @@ export async function fetchModel(manifest, onProgress = () => {}) {
     const cache = await caches.open(CACHE_PREFIX + manifest.revision);
     const files = {};
     for (const file of manifest.files) {
-        // Multi-part files are joined from their parts and are not kept in Cache Storage.
-        let bytes = file.parts ? null : await readCached(cache, manifest, file);
+        // Split files are joined from their parts once, then cached whole like any other file.
+        let bytes = await readCached(cache, manifest, file);
         if (bytes) {
             try {
                 bytes = await verified(file, bytes);
@@ -113,18 +122,14 @@ export async function fetchModel(manifest, onProgress = () => {}) {
             onProgress(file.path, file.bytes, file.bytes, 'cache');
         } else if (file.parts) {
             bytes = await verified(file, await fetchParts(manifest, file, onProgress));
+            await storeBestEffort(cache, manifest, file, bytes);
         } else {
             const response = await fetch(manifest.base_url + file.path);
             if (!response.ok) {
                 throw new Error(`cannot download ${file.path}: HTTP ${response.status}`);
             }
             bytes = await verified(file, await readWithProgress(response, file, onProgress));
-            try {
-                await storeCached(cache, manifest, file, bytes);
-            } catch {
-                // Caching is best-effort (quota, private windows): the verified bytes are still used.
-                await forgetCached(cache, manifest, file).catch(() => {});
-            }
+            await storeBestEffort(cache, manifest, file, bytes);
         }
         files[file.path.split('/').pop()] = bytes;
     }
